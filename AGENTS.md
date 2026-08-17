@@ -88,7 +88,9 @@ yougile-mcp/
 ├── API_REFERENCE.md         # Справочник YouGile REST API v2 (1063 строки)
 ├── LEGACY_PROJECT_STATE.md  # Анализ легаси Python-скриптов и OpenClaw-скиллов
 ├── PLAN.md                  # Поэтапный план реализации MCP-сервера
-└── .git/                    # Git-репозиторий (3 коммита)
+├── SCENARIOS.md             # Спецификации 7 пользовательских сценариев (шаг 2)
+├── DESIGN.md                # DDD-дизайн: value objects, entities, aggregates, репозитории (шаг 3)
+└── .git/                    # Git-репозиторий (4 коммита)
 ```
 
 ### Planned (целевая структура)
@@ -129,9 +131,11 @@ yougile-mcp/
 
 | Файл | Назначение |
 |------|------------|
-| `PLAN.md` | 9-шаговый план реализации: от Go-пакетов до MCP-инструментов. Содержит пользовательские сценарии, карту сервисов, список событий, roadmap. **Читать первым перед началом работы.** |
+| `PLAN.md` | 6-шаговый DDD-first план: от API-справочника (шаг 1) через определение пользовательских сценариев (шаг 2, business-first) и дизайн сущностей/сервисов/кодовых решений (шаги 3-5, **блокирующие** — реализация не начинается до их завершения) до дорожной карты (шаг 6). **Читать первым перед началом работы.** |
 | `API_REFERENCE.md` | Полный справочник YouGile REST API v2: все 40+ эндпоинтов, DTO запросов/ответов, форматы полей, пагинация (PagingMetadata), вспомогательные DTO (Deadline, CheckList, Stopwatch, Timer, TimeTracking). Содержит раздел неопределённостей (раздел 19), требующих экспериментальной проверки. |
 | `LEGACY_PROJECT_STATE.md` | Анализ 4 существующих OpenClaw-скиллов и Python-скриптов: архитектура, доска Hybrid GTD/OKR (8 колонок, 7 стикеров), проблемы (хардкод, нет пагинации, нет retry, rate limit хаос), что должен заменить MCP-сервер. |
+| `SCENARIOS.md` | Спецификации 7 пользовательских сценариев (шаг 2): входы/выходы, API-эндпоинты, граничные случаи, сводная таблица. Основа для DDD-дизайна. |
+| `DESIGN.md` | DDD-дизайн (шаг 3): value objects, entities, aggregates, repository interfaces (Go-синтаксис). Модель выстроена под сценарии. |
 | `AGENTS.md` | Этот файл — ориентация агентов в проекте. |
 
 ### Целевые файлы (planned)
@@ -329,7 +333,7 @@ type Handler func(context.Context, Event)
 | `AGENTS.md` | Первичная точка входа для агента — ориентация в проекте | ✅ actual |
 | `PLAN.md` | Определение текущего шага реализации | ✅ actual |
 | `cmd/yougile-mcp/main.go` | Точка входа сервера: DI, запуск MCP | ⏳ planned |
-| `internal/infrastructure/http/client.go` | Создание настроенного HTTP-клиента | ⏳ planned (roadmap шаг 1) |
+| `internal/infrastructure/http/client.go` | Создание настроенного HTTP-клиента | ⏳ planned (design step 5) |
 
 ---
 
@@ -358,32 +362,45 @@ type Handler func(context.Context, Event)
 
 ## MCP Tools (Planned)
 
-| MCP Tool | Сервис | Описание |
-|----------|--------|----------|
-| `list_projects` | BoardService | Список проектов |
-| `list_boards` | BoardService | Список досок проекта |
-| `list_columns` | BoardService | Список колонок доски |
-| `list_tasks` | TaskService | Список задач (с фильтрацией по колонке) |
-| `create_task` | TaskService | Создание задачи |
-| `update_task` | TaskService | Обновление задачи (перемещение, стикеры, дедлайн) |
-| `bulk_move_tasks` | TaskService | Массовое перемещение задач |
-| `batch_update_stickers` | TaskService | Массовое обновление стикеров |
-| `summarize_board` | ReviewService | Сводка по доске |
-| `audit_board` | AuditService | Аудит доски (просрочка, стикеры) |
-| `track_goals` | GoalService | Прогресс целей (weighted KR) |
-| `compress_reviews` | CompressionService | Сжатие ревью (daily→weekly→...) |
+> Два слоя: тонкий CRUD + композитные (1 вызов покрывает весь сценарий). Аналитика принимает `format: json|markdown` (по умолчанию markdown, TL;DR сверху), CRUD возвращает JSON. Композитные принимают `since` для дельта-обновлений. Подробности — PLAN.md шаг 2.
 
-## Roadmap (из PLAN.md)
+### Слой 1 — тонкий CRUD
 
-| Этап | Компоненты | Статус |
-|------|------------|--------|
-| 1 | HTTP-клиент (auth, rate limit, retry) | ⏳ pending |
-| 2 | Репозитории (CRUD) | ⏳ pending |
-| 3 | Базовые сервисы (Board, Task) | ⏳ pending |
-| 4 | MCP-сервер (интеграция инструментов) | ⏳ pending |
-| 5 | Аналитика (Review, Audit, Goal) | ⏳ pending |
-| 6 | События и цепочки | ⏳ pending |
-| 7 | Компрессия ревью | ⏳ pending |
+| MCP Tool | Сервис | Описание | Формат |
+|----------|--------|----------|--------|
+| `list_projects` | BoardService | Список проектов | JSON |
+| `list_boards` | BoardService | Список досок проекта | JSON |
+| `list_columns` | BoardService | Список колонок доски | JSON |
+| `list_tasks` | TaskService | Задачи доски/колонки + названия колонок + легенда стикеров | json\|markdown |
+| `get_task` | TaskService | Задача по ID | JSON |
+| `create_task` | TaskService | Создание задачи | JSON |
+| `update_task` | TaskService | Обновление задачи (перемещение, стикеры, дедлайн) | JSON |
+| `get_stickers` | BoardService | Легенда стикеров доски | JSON |
+
+### Слой 2 — композитные (1 вызов = весь сценарий)
+
+| MCP Tool | Сервис | Описание | Формат |
+|----------|--------|----------|--------|
+| `get_board_snapshot` | BoardService | Полное состояние доски: колонки, задачи, стикеры, пользователи | json\|markdown |
+| `summarize_board` | ReviewService | Сводка: TL;DR + метрики + группировка + рекомендации | json\|markdown |
+| `audit_board` | AuditService | Аудит: просрочка, отсутствие стикеров, авто-перемещение | json\|markdown |
+| `track_goals` | GoalService | Прогресс целей (weighted KR) | json\|markdown |
+| `bulk_move_tasks` | TaskService | Массовое перемещение задач | JSON |
+| `batch_update_stickers` | TaskService | Массовое обновление стикеров | JSON |
+| `compress_reviews` | CompressionService | Сжатие ревью (daily→weekly→...) | markdown |
+
+## Design Plan (из PLAN.md)
+
+> Проект в фазе **архитектурного проектирования**. Шаги 2-5 — блокирующие: никакая реализация (Go-код) не начинается, пока дизайн не завершён.
+
+| Шаг | Компоненты | Статус |
+|-----|------------|--------|
+| 1 | API Reference (справочник эндпоинтов, DTO, неопределённости) | ✅ done |
+| 2 | Определение пользовательских сценариев (business-first) → [`SCENARIOS.md`](SCENARIOS.md) | ✅ done |
+| 3 | Дизайн DDD сущностей на основе сценариев → [`DESIGN.md`](DESIGN.md) | ✅ done |
+| 4 | Дизайн доменных сервисов (Board, Task, Review, Audit, Goal, Compression) + Event Bus | ⏳ pending |
+| 5 | Дизайн кодовых решений (структура Go-пакетов, HTTP-клиент с RoundTripper, репозитории, MCP-интеграция, ADR) | ⏳ pending |
+| 6 | Дальнейшее планирование (порядок реализации, спринты, критерии готовности, тестирование) | ⏳ pending |
 
 ## Known API Uncertainties
 
@@ -394,15 +411,19 @@ type Handler func(context.Context, Event)
 3. **Взаимосвязь `/stickers` и `/string-stickers`** — старый и новый механизмы стикеров
 4. **Формат ошибок** — тело ответа при 400/401/404/429
 5. **Наличие `paging`** в BoardListDto, ColumnListDto (не указано в spec)
+6. **`GET /tasks?boardId=` без `columnId`** — возвращает ли все задачи доски одним запросом? Если да — срезает 8 запросов по колонкам до 1
 
 ---
 
 ## Git History
 
 ```
+5793f7f docs: restructure PLAN.md with 6-step DDD-first plan and regenerate AGENTS.md via init skill
 ca3deb1 docs: add user scenarios section and renumber plan steps
 86441f6 docs: add AGENTS.md with project overview and conventions
 d77c5b1 Initial project scaffold: docs and plan
 ```
 
 **Ветка**: единственная (main/master). История плоская, без мерджей.
+
+> ⚠️ Не закоммичено: SCENARIOS.md, DESIGN.md, правки PLAN.md/AGENTS.md (шаги 2-3). Коммит — только по команде пользователя.
