@@ -4,11 +4,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/yougile-mcp/internal/audit"
 	"github.com/yougile-mcp/internal/domain/board"
 	"github.com/yougile-mcp/internal/domain/task"
 	"github.com/yougile-mcp/internal/domain/valueobject"
@@ -20,34 +23,47 @@ import (
 	taskservice "github.com/yougile-mcp/internal/service/task"
 )
 
+// Deps — зависимости MCP-сервера.
+type Deps struct {
+	Board       boardservice.Service
+	Tasks       taskservice.Service
+	Review      reviewservice.Service
+	AuditSvc    auditservice.Service
+	Goal        goalservice.Service
+	Compression compressionservice.Service
+	ReadOnly    bool         // read-only режим: мутационные инструменты не регистрируются
+	AuditLog    audit.Logger // аудит мутаций (nil → заглушка)
+}
+
 // Server — MCP-сервер YouGile.
 type Server struct {
-	mcp    *server.MCPServer
-	board  boardservice.Service
-	tasks  taskservice.Service
-	review reviewservice.Service
-	audit  auditservice.Service
-	goal   goalservice.Service
-	comp   compressionservice.Service
+	mcp      *server.MCPServer
+	board    boardservice.Service
+	tasks    taskservice.Service
+	review   reviewservice.Service
+	audit    auditservice.Service
+	goal     goalservice.Service
+	comp     compressionservice.Service
+	readOnly bool
+	auditLog audit.Logger
 }
 
 // New создаёт MCP-сервер с зарегистрированными инструментами.
-func New(
-	board boardservice.Service,
-	tasks taskservice.Service,
-	review reviewservice.Service,
-	audit auditservice.Service,
-	goal goalservice.Service,
-	comp compressionservice.Service,
-) *Server {
+func New(deps Deps) *Server {
+	log := deps.AuditLog
+	if log == nil {
+		log = audit.NewNoopLogger()
+	}
 	s := &Server{
-		mcp:    server.NewMCPServer("yougile-mcp", "0.1.0", server.WithToolCapabilities(false)),
-		board:  board,
-		tasks:  tasks,
-		review: review,
-		audit:  audit,
-		goal:   goal,
-		comp:   comp,
+		mcp:      server.NewMCPServer("yougile-mcp", "0.1.0", server.WithToolCapabilities(false)),
+		board:    deps.Board,
+		tasks:    deps.Tasks,
+		review:   deps.Review,
+		audit:    deps.AuditSvc,
+		goal:     deps.Goal,
+		comp:     deps.Compression,
+		readOnly: deps.ReadOnly,
+		auditLog: log,
 	}
 	s.registerTools()
 	return s
@@ -57,109 +73,160 @@ func New(
 func (s *Server) MCPServer() *server.MCPServer { return s.mcp }
 
 // registerTools регистрирует инструменты двух слоёв.
+// В read-only режиме мутационные инструменты не регистрируются вообще.
 func (s *Server) registerTools() {
+	ro := func(opts ...mcp.ToolOption) []mcp.ToolOption {
+		return append(opts, mcp.WithReadOnlyHintAnnotation(true), mcp.WithDestructiveHintAnnotation(false), mcp.WithIdempotentHintAnnotation(true))
+	}
+	mut := func(opts ...mcp.ToolOption) []mcp.ToolOption {
+		return append(opts, mcp.WithReadOnlyHintAnnotation(false), mcp.WithDestructiveHintAnnotation(true))
+	}
+	register := s.mcp.AddTool
+	mutating := func(tool mcp.Tool, name string, h server.ToolHandlerFunc) {
+		if s.readOnly {
+			return // не регистрируем вообще — LLM не видит
+		}
+		s.mcp.AddTool(tool, s.wrapMutating(name, h))
+	}
+
 	// ── Слой 1: тонкий CRUD ──
-	s.mcp.AddTool(mcp.NewTool("list_projects",
-		mcp.WithDescription("Список проектов"),
+	register(mcp.NewTool("list_projects",
+		ro(mcp.WithDescription("Список проектов"))...,
 	), s.handleListProjects)
 
-	s.mcp.AddTool(mcp.NewTool("list_boards",
-		mcp.WithDescription("Список досок проекта"),
-		mcp.WithString("projectId", mcp.Required(), mcp.Description("ID проекта")),
+	register(mcp.NewTool("list_boards",
+		ro(mcp.WithDescription("Список досок проекта"),
+			mcp.WithString("projectId", mcp.Required(), mcp.Description("ID проекта")))...,
 	), s.handleListBoards)
 
-	s.mcp.AddTool(mcp.NewTool("list_columns",
-		mcp.WithDescription("Список колонок доски"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+	register(mcp.NewTool("list_columns",
+		ro(mcp.WithDescription("Список колонок доски"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")))...,
 	), s.handleListColumns)
 
-	s.mcp.AddTool(mcp.NewTool("list_tasks",
-		mcp.WithDescription("Задачи доски/колонки + названия колонок + легенда стикеров"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithString("columnId", mcp.Description("ID колонки (опционально)")),
-		mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию json)")),
+	register(mcp.NewTool("list_tasks",
+		ro(mcp.WithDescription("Задачи доски/колонки + названия колонок + легенда стикеров"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithString("columnId", mcp.Description("ID колонки (опционально)")),
+			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию json)")))...,
 	), s.handleListTasks)
 
-	s.mcp.AddTool(mcp.NewTool("get_task",
-		mcp.WithDescription("Задача по ID"),
-		mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
+	register(mcp.NewTool("get_task",
+		ro(mcp.WithDescription("Задача по ID"),
+			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")))...,
 	), s.handleGetTask)
 
-	s.mcp.AddTool(mcp.NewTool("create_task",
-		mcp.WithDescription("Создание задачи"),
-		mcp.WithString("title", mcp.Required(), mcp.Description("Название")),
-		mcp.WithString("columnId", mcp.Description("ID колонки")),
-		mcp.WithString("description", mcp.Description("Описание")),
-		mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
-	), s.handleCreateTask)
+	mutating(mcp.NewTool("create_task",
+		mut(mcp.WithDescription("Создание задачи"),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Название")),
+			mcp.WithString("columnId", mcp.Description("ID колонки")),
+			mcp.WithString("description", mcp.Description("Описание")),
+			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")))...,
+	), "create_task", s.handleCreateTask)
 
-	s.mcp.AddTool(mcp.NewTool("update_task",
-		mcp.WithDescription("Обновление задачи (перемещение, стикеры, дедлайн)"),
-		mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
-		mcp.WithString("columnId", mcp.Description("Целевая колонка (перемещение)")),
-		mcp.WithString("title", mcp.Description("Новое название")),
-		mcp.WithString("description", mcp.Description("Новое описание")),
-		mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
-		mcp.WithBoolean("completed", mcp.Description("Выполнена")),
-	), s.handleUpdateTask)
+	mutating(mcp.NewTool("update_task",
+		mut(mcp.WithDescription("Обновление задачи (перемещение, стикеры, дедлайн)"),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
+			mcp.WithString("columnId", mcp.Description("Целевая колонка (перемещение)")),
+			mcp.WithString("title", mcp.Description("Новое название")),
+			mcp.WithString("description", mcp.Description("Новое описание")),
+			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
+			mcp.WithBoolean("completed", mcp.Description("Выполнена")))...,
+	), "update_task", s.handleUpdateTask)
 
-	s.mcp.AddTool(mcp.NewTool("get_stickers",
-		mcp.WithDescription("Легенда стикеров доски"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+	register(mcp.NewTool("get_stickers",
+		ro(mcp.WithDescription("Легенда стикеров доски"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")))...,
 	), s.handleGetStickers)
 
 	// ── Слой 2: композитные ──
-	s.mcp.AddTool(mcp.NewTool("get_board_snapshot",
-		mcp.WithDescription("Полное состояние доски: колонки, задачи, стикеры"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms, только изменённые")),
-		mcp.WithString("format", mcp.Description("Формат: json|markdown")),
+	register(mcp.NewTool("get_board_snapshot",
+		ro(mcp.WithDescription("Полное состояние доски: колонки, задачи, стикеры"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms, только изменённые")),
+			mcp.WithString("format", mcp.Description("Формат: json|markdown")))...,
 	), s.handleGetBoardSnapshot)
 
-	s.mcp.AddTool(mcp.NewTool("summarize_board",
-		mcp.WithDescription("Сводка: TL;DR + метрики + группировка + рекомендации"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms")),
-		mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")),
+	register(mcp.NewTool("summarize_board",
+		ro(mcp.WithDescription("Сводка: TL;DR + метрики + группировка + рекомендации"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms")),
+			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")))...,
 	), s.handleSummarizeBoard)
 
-	s.mcp.AddTool(mcp.NewTool("audit_board",
-		mcp.WithDescription("Аудит: просрочка, отсутствие стикеров, авто-перемещение"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithBoolean("overdue", mcp.Description("Проверка просрочки")),
-		mcp.WithBoolean("missingStickers", mcp.Description("Проверка стикеров")),
-		mcp.WithBoolean("autoMove", mcp.Description("Перемещать просроченные в Review")),
-		mcp.WithBoolean("dryRun", mcp.Description("Только чтение, без изменений")),
-		mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")),
-	), s.handleAuditBoard)
+	mutating(mcp.NewTool("audit_board",
+		mut(mcp.WithDescription("Аудит: просрочка, отсутствие стикеров, авто-перемещение"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithBoolean("overdue", mcp.Description("Проверка просрочки")),
+			mcp.WithBoolean("missingStickers", mcp.Description("Проверка стикеров")),
+			mcp.WithBoolean("autoMove", mcp.Description("Перемещать просроченные в Review")),
+			mcp.WithBoolean("dryRun", mcp.Description("Только чтение, без изменений")),
+			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")))...,
+	), "audit_board", s.handleAuditBoard)
 
-	s.mcp.AddTool(mcp.NewTool("track_goals",
-		mcp.WithDescription("Прогресс целей (weighted KR)"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms")),
-		mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")),
+	register(mcp.NewTool("track_goals",
+		ro(mcp.WithDescription("Прогресс целей (weighted KR)"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms")),
+			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию markdown)")))...,
 	), s.handleTrackGoals)
 
-	s.mcp.AddTool(mcp.NewTool("bulk_move_tasks",
-		mcp.WithDescription("Массовое перемещение задач"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithString("sourceColumnId", mcp.Description("Колонка-источник (все задачи)")),
-		mcp.WithString("targetColumnId", mcp.Required(), mcp.Description("Целевая колонка")),
-		mcp.WithBoolean("dryRun", mcp.Description("Только чтение")),
-	), s.handleBulkMove)
+	mutating(mcp.NewTool("bulk_move_tasks",
+		mut(mcp.WithDescription("Массовое перемещение задач"),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithString("sourceColumnId", mcp.Description("Колонка-источник (все задачи)")),
+			mcp.WithString("targetColumnId", mcp.Required(), mcp.Description("Целевая колонка")),
+			mcp.WithBoolean("dryRun", mcp.Description("Только чтение")))...,
+	), "bulk_move_tasks", s.handleBulkMove)
 
-	s.mcp.AddTool(mcp.NewTool("batch_update_stickers",
-		mcp.WithDescription("Массовое обновление стикеров"),
-		mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
-		mcp.WithBoolean("dryRun", mcp.Description("Только чтение")),
-	), s.handleBatchStickers)
+	mutating(mcp.NewTool("batch_update_stickers",
+		mut(mcp.WithDescription("Массовое обновление стикеров"),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithBoolean("dryRun", mcp.Description("Только чтение")))...,
+	), "batch_update_stickers", s.handleBatchStickers)
 
-	s.mcp.AddTool(mcp.NewTool("compress_reviews",
-		mcp.WithDescription("Сжатие ревью (daily→weekly→...)"),
-		mcp.WithString("level", mcp.Required(), mcp.Description("daily|weekly|monthly|yearly")),
-		mcp.WithNumber("from", mcp.Required(), mcp.Description("Начало периода (ms)")),
-		mcp.WithNumber("to", mcp.Required(), mcp.Description("Конец периода (ms)")),
+	register(mcp.NewTool("compress_reviews",
+		ro(mcp.WithDescription("Сжатие ревью (daily→weekly→...) — пишет только локальные файлы отчётов"),
+			mcp.WithString("level", mcp.Required(), mcp.Description("daily|weekly|monthly|yearly")),
+			mcp.WithNumber("from", mcp.Required(), mcp.Description("Начало периода (ms)")),
+			mcp.WithNumber("to", mcp.Required(), mcp.Description("Конец периода (ms)")))...,
 	), s.handleCompress)
+}
+
+// wrapMutating оборачивает мутационный хендлер: аудит + read-only защита.
+func (s *Server) wrapMutating(name string, h server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args := req.GetArguments()
+		if s.readOnly {
+			res := errResult(errors.New("сервер в read-only режиме: мутации запрещены"))
+			s.auditLog.Log(name, "read-only-blocked", args)
+			return res, nil
+		}
+		res, err := h(ctx, req)
+		// dryRun-вызовы — не мутации, в аудит не пишем
+		if !boolVal(args, "dryRun") {
+			outcome := "ok"
+			if err != nil || strings.HasPrefix(firstText(res), "Ошибка") {
+				outcome = "error"
+			}
+			s.auditLog.Log(name, outcome, args)
+		}
+		return res, err
+	}
+}
+
+// firstText возвращает первый текстовый контент результата.
+func firstText(res *mcp.CallToolResult) string {
+	if res == nil || len(res.Content) == 0 {
+		return ""
+	}
+	if c, ok := res.Content[0].(mcp.TextContent); ok {
+		return c.Text
+	}
+	return ""
 }
 
 // ── Хендлеры слоя 1 ──

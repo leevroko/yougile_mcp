@@ -72,6 +72,16 @@ go fmt ./...
 
 ---
 
+## Security & Config (кратко; подробно — SECURITY.md)
+
+- **Credentials вне env**: `~/.config/yougile-mcp/config.json` (каталог 700, файл 600). Загрузка: `--config` > `YOUGILE_CONFIG` (только путь) > дефолт. Миграция: `yougile-mcp init`. При неправильных правах сервер отказывается стартовать.
+- **Read-only**: `"read_only": true` → мутационные инструменты не регистрируются (10 из 15).
+- **Политика расширения**: `permissions.allow/confirm/deny` (glob) в конфиге; confirm — диалог пользователя, deny — невидим для LLM; bulk — dry-run-first.
+- **Аудит мутаций**: JSONL `~/.local/state/yougile-mcp/audit.jsonl` (tool, outcome, args).
+- **Команда pi**: `/yougile-status`.
+
+---
+
 ## Repository Structure
 
 ### Actual (текущее состояние)
@@ -102,6 +112,8 @@ yougile-mcp/
 │   ├── infrastructure/
 │   │   ├── http/            # HTTP-клиент: RoundTripper (auth → rate limit → retry)
 │   │   └── repository/      # HTTP-реализации репозиториев (пагинация, DTO)
+│   ├── config/              # Конфиг ~/.config/yougile-mcp/config.json (ключ вне env, права 600)
+│   ├── audit/               # Аудит мутаций: JSONL ~/.local/state/yougile-mcp/audit.jsonl
 │   ├── service/             # Доменные сервисы (прямые вызовы, без Event Bus)
 │   │   ├── board/           # CRUD + GetBoardSnapshot
 │   │   ├── task/            # CRUD + ListTasks + BulkMove + BatchStickers
@@ -109,8 +121,9 @@ yougile-mcp/
 │   │   ├── audit/           # Audit (overdue, стикеры, autoMove)
 │   │   ├── goal/            # TrackGoals / WeightedKR
 │   │   └── compression/     # Compress (daily→weekly→...)
-│   └── mcp/                 # MCP-сервер: 15 инструментов, markdown-рендер
-└── .git/                    # Git-репозиторий (6 коммитов, MVP не закоммичен)
+│   └── mcp/                 # MCP-сервер: 15 инструментов, аннотации, read-only, markdown-рендер
+├── pi-extension/            # Reference pi-расширения (~/.pi/agent/extensions/yougile-mcp/)
+└── .git/                    # Git-репозиторий
 ```
 
 ---
