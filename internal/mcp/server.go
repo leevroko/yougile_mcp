@@ -108,6 +108,8 @@ func (s *Server) registerTools() {
 		ro(mcp.WithDescription("Задачи доски/колонки + названия колонок + легенда стикеров"),
 			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
 			mcp.WithString("columnId", mcp.Description("ID колонки (опционально)")),
+			mcp.WithBoolean("includeCompleted", mcp.Description("Включить выполненные (по умолчанию false)")),
+			mcp.WithBoolean("includeArchived", mcp.Description("Включить архивированные (по умолчанию false)")),
 			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию json)")))...,
 	), s.handleListTasks)
 
@@ -142,9 +144,11 @@ func (s *Server) registerTools() {
 
 	// ── Слой 2: композитные ──
 	register(mcp.NewTool("get_board_snapshot",
-		ro(mcp.WithDescription("Полное состояние доски: колонки, задачи, стикеры"),
+		ro(mcp.WithDescription("Полное состояние доски: колонки, задачи, стикеры. По умолчанию только активные задачи"),
 			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
 			mcp.WithNumber("since", mcp.Description("Дельта: timestamp ms, только изменённые")),
+			mcp.WithBoolean("includeCompleted", mcp.Description("Включить выполненные (по умолчанию false)")),
+			mcp.WithBoolean("includeArchived", mcp.Description("Включить архивированные (по умолчанию false)")),
 			mcp.WithString("format", mcp.Description("Формат: json|markdown")))...,
 	), s.handleGetBoardSnapshot)
 
@@ -291,7 +295,10 @@ func (s *Server) handleListTasks(ctx context.Context, req mcp.CallToolRequest) (
 		}
 		cid = &c
 	}
-	res, err := s.tasks.ListTasks(ctx, bid, cid)
+	res, err := s.tasks.ListTasksFiltered(ctx, bid, cid, taskservice.TaskFilter{
+		IncludeCompleted: boolVal(args, "includeCompleted"),
+		IncludeArchived:  boolVal(args, "includeArchived"),
+	})
 	if err != nil {
 		return errResult(err), nil
 	}
@@ -416,7 +423,10 @@ func (s *Server) handleGetBoardSnapshot(ctx context.Context, req mcp.CallToolReq
 		v := int64(d)
 		since = &v
 	}
-	snap, err := s.board.GetBoardSnapshot(ctx, bid, since)
+	snap, err := s.board.GetBoardSnapshotFiltered(ctx, bid, since, boardservice.SnapshotFilter{
+		IncludeCompleted: boolVal(args, "includeCompleted"),
+		IncludeArchived:  boolVal(args, "includeArchived"),
+	})
 	if err != nil {
 		return errResult(err), nil
 	}

@@ -26,6 +26,8 @@ type Service interface {
 
 	// ListTasks — с вложенными справочными данными (колонки + легенда стикеров)
 	ListTasks(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID) (ListResult, error)
+	// ListTasksFiltered — ListTasks с фильтрацией по completed/archived (по умолчанию только активные)
+	ListTasksFiltered(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID, f TaskFilter) (ListResult, error)
 
 	// Bulk Move
 	BulkMove(ctx context.Context, req BulkMoveParams) (BulkMoveResult, error)
@@ -49,6 +51,32 @@ type ListResult struct {
 	Tasks      []domaintask.Task
 	Columns    []domaincolumn.Column                           // названия колонок
 	StickerMap map[valueobject.StickerID]domainsticker.Sticker // легенда
+}
+
+// TaskFilter — фильтрация задач по завершённости/архиву.
+// Пустое значение = только активные (не completed, не archived, не deleted).
+type TaskFilter struct {
+	IncludeCompleted bool
+	IncludeArchived  bool
+}
+
+// filterTasks применяет фильтр к задачам.
+// Всегда исключает удалённые (deleted) — они не нужны ни в каком режиме.
+func filterTasks(tasks []domaintask.Task, f TaskFilter) []domaintask.Task {
+	out := make([]domaintask.Task, 0, len(tasks))
+	for _, t := range tasks {
+		if t.Deleted {
+			continue
+		}
+		if t.Archived && !f.IncludeArchived {
+			continue
+		}
+		if t.Completed && !f.IncludeCompleted {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // MarshalJSON сериализует ListResult, приводя ключи StickerMap к строкам.
@@ -147,6 +175,13 @@ func (s *service) DeleteTask(ctx context.Context, taskID valueobject.TaskID) err
 
 // ListTasks возвращает задачи с вложенными колонками и легендой стикеров.
 func (s *service) ListTasks(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID) (ListResult, error) {
+	return s.ListTasksFiltered(ctx, boardID, columnID, TaskFilter{})
+}
+
+// ListTasksFiltered возвращает задачи с фильтрацией по завершённости/архиву.
+// По умолчанию (TaskFilter{}) возвращает только активные задачи
+// (не completed, не archived, не deleted) — агент не получает неактуальное.
+func (s *service) ListTasksFiltered(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID, f TaskFilter) (ListResult, error) {
 	cols, _, err := s.columns.List(ctx, boardID)
 	if err != nil {
 		return ListResult{}, err
@@ -171,6 +206,8 @@ func (s *service) ListTasks(ctx context.Context, boardID valueobject.BoardID, co
 			tasks = append(tasks, colTasks...)
 		}
 	}
+
+	tasks = filterTasks(tasks, f)
 
 	st, err := s.stickers.List(ctx, boardID)
 	if err != nil {

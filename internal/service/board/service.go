@@ -20,8 +20,10 @@ type Service interface {
 	ListStickers(ctx context.Context, boardID valueobject.BoardID) ([]sticker.Sticker, error)
 
 	// GetBoardSnapshot — полное состояние доски (сценарий snapshot).
-	// Обходит все колонки и все страницы задач.
+	// По умолчанию только активные задачи (не completed, не archived);
+	// includeCompleted/includeArchived включают их.
 	GetBoardSnapshot(ctx context.Context, boardID valueobject.BoardID, since *int64) (board.Aggregate, error)
+	GetBoardSnapshotFiltered(ctx context.Context, boardID valueobject.BoardID, since *int64, f SnapshotFilter) (board.Aggregate, error)
 
 	CreateProject(ctx context.Context, title string) (valueobject.ProjectID, error)
 	CreateBoard(ctx context.Context, title string, projectID valueobject.ProjectID) (valueobject.BoardID, error)
@@ -64,8 +66,20 @@ func (s *service) ListStickers(ctx context.Context, boardID valueobject.BoardID)
 	return s.stickers.List(ctx, boardID)
 }
 
+// SnapshotFilter — фильтрация задач в snapshot.
+type SnapshotFilter struct {
+	IncludeCompleted bool
+	IncludeArchived  bool
+}
+
 // GetBoardSnapshot собирает агрегат: доска + колонки + задачи + легенда стикеров.
+// По умолчанию только активные задачи.
 func (s *service) GetBoardSnapshot(ctx context.Context, boardID valueobject.BoardID, since *int64) (board.Aggregate, error) {
+	return s.GetBoardSnapshotFiltered(ctx, boardID, since, SnapshotFilter{})
+}
+
+// GetBoardSnapshotFiltered — snapshot с фильтрацией задач.
+func (s *service) GetBoardSnapshotFiltered(ctx context.Context, boardID valueobject.BoardID, since *int64, f SnapshotFilter) (board.Aggregate, error) {
 	b, err := s.boards.GetByID(ctx, boardID)
 	if err != nil {
 		return board.Aggregate{}, err
@@ -90,6 +104,15 @@ func (s *service) GetBoardSnapshot(ctx context.Context, boardID valueobject.Boar
 			for _, t := range tasks {
 				if since != nil && t.Timestamp < *since {
 					continue // дельта: пропустить не изменившиеся
+				}
+				if t.Deleted {
+					continue
+				}
+				if t.Archived && !f.IncludeArchived {
+					continue
+				}
+				if t.Completed && !f.IncludeCompleted {
+					continue
 				}
 				all = append(all, t)
 			}
