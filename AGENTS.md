@@ -90,7 +90,8 @@ yougile-mcp/
 ├── PLAN.md                  # Поэтапный план реализации MCP-сервера
 ├── SCENARIOS.md             # Спецификации 7 пользовательских сценариев (шаг 2)
 ├── DESIGN.md                # DDD-дизайн: value objects, entities, aggregates, репозитории (шаг 3)
-└── .git/                    # Git-репозиторий (4 коммита)
+├── SERVICES.md              # Дизайн доменных сервисов: Board, Task, Review, Audit, Goal, Compression (шаг 4)
+└── .git/                    # Git-репозиторий (5 коммитов)
 ```
 
 ### Planned (целевая структура)
@@ -136,6 +137,7 @@ yougile-mcp/
 | `LEGACY_PROJECT_STATE.md` | Анализ 4 существующих OpenClaw-скиллов и Python-скриптов: архитектура, доска Hybrid GTD/OKR (8 колонок, 7 стикеров), проблемы (хардкод, нет пагинации, нет retry, rate limit хаос), что должен заменить MCP-сервер. |
 | `SCENARIOS.md` | Спецификации 7 пользовательских сценариев (шаг 2): входы/выходы, API-эндпоинты, граничные случаи, сводная таблица. Основа для DDD-дизайна. |
 | `DESIGN.md` | DDD-дизайн (шаг 3): value objects, entities, aggregates, repository interfaces (Go-синтаксис). Модель выстроена под сценарии. |
+| `SERVICES.md` | Дизайн доменных сервисов (шаг 4): Board, Task, Review, Audit, Goal, Compression с интерфейсами и логикой. Прямые вызовы вместо Event Bus. |
 | `AGENTS.md` | Этот файл — ориентация агентов в проекте. |
 
 ### Целевые файлы (planned)
@@ -164,17 +166,8 @@ yougile-mcp/
 │  (internal/service/) — бизнес-логика, агрегация       │
 │  BoardService, TaskService, ReviewService,           │
 │  AuditService, GoalService, CompressionService       │
-│  Эмитят события в EventBus                           │
-└──────┬──────────────────────────────────┬────────────┘
-       │ вызовы репозиториев              │ событие
-┌──────▼──────────┐            ┌──────────▼──────────┐
-│  Domain Layer    │            │     Event Bus        │
-│  (internal/)     │            │  (internal/event/)   │
-│  ─ interfaces    │            │  in-memory pub/sub   │
-│  ─ value objects │            │  TaskCreated,        │
-│  ─ entities      │            │  TaskMoved,          │
-│  ─ aggregates    │            │  OverdueDetected     │
-└──────┬───────────┘            └──────────────────────┘
+│  Прямые вызовы между сервисами (без Event Bus)       │
+└──────┬───────────────────────────────────────────────┘
        │ имплементация
 ┌──────▼─────────────────────────────────────────────┐
 │              Infrastructure Layer                    │
@@ -193,7 +186,7 @@ yougile-mcp/
 
 1. **DDD (Domain-Driven Design)** — каждый доменный пакет самодостаточен: entity, value objects, repository interface. Никаких общего `models.go`.
 2. **HTTP-клиент через RoundTripper** — middleware-цепочка: Bearer auth → Token bucket rate limiter → Retry → HTTP-транспорт. Никаких обёрток поверх `http.Client`.
-3. **Event Bus (in-memory pub/sub)** — слабая связность между сервисами. AuditService подписывается на `TaskCreated`, CompressionService на `ReviewGenerated`.
+3. **Прямые вызовы между сервисами** (вместо Event Bus) — сервисы вызывают друг друга напрямую, без pub/sub. Связи однонаправленные, без циклов (см. SERVICES.md §9).
 4. **Ручная пагинация** — API не поддерживает cursor-based пагинацию. Только `offset += limit` пока `paging.next === true`.
 5. **Минимум зависимостей** — только MCP SDK (`github.com/mark3labs/mcp-go`), всё остальное стандартная библиотека Go.
 
@@ -292,17 +285,18 @@ func NewTaskID(s string) (TaskID, error) { ... }
 func (id TaskID) String() string { return id.value }
 ```
 
-### Event Bus Pattern
+### Service Call Pattern (вместо Event Bus)
 
 ```go
-// internal/event/bus.go
-type Bus interface {
-    Publish(event Event)
-    Subscribe(eventType string, handler Handler) Subscription
+// internal/service/review/review.go
+// Прямой вызов другого сервиса (владельца данных) вместо событий
+func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.BoardID, since *int64) (Summary, error) {
+    snap, err := s.boards.GetBoardSnapshot(ctx, boardID, since)
+    // ... агрегация метрик
 }
-type Event interface { Type() string }
-type Handler func(context.Context, Event)
 ```
+
+**Принцип**: связи направлены от «потребителя» к «провайдеру» (сервис, владеющий данными). Если связь станет двунаправленной — вынести общий код в низкоуровневый сервис.
 
 ---
 
@@ -349,16 +343,16 @@ type Handler func(context.Context, Event)
 | **Batch Stickers** | Массовое обновление стикеров у группы задач | отсутствовало |
 | **Compression** | Цепочка: daily → weekly → monthly → yearly review | `review-compression.md` |
 
-## Services & Events (Planned)
+## Services (Planned)
 
-| Сервис | Сценарии | События (эмитит) | События (подписан) |
-|--------|----------|-------------------|---------------------|
-| **BoardService** | Quick Actions | — | — |
-| **TaskService** | Quick Actions, Bulk Move, Batch Stickers | TaskCreated, TaskMoved, TaskCompleted | — |
-| **ReviewService** | Summarize | ReviewGenerated | OverdueDetected |
-| **AuditService** | Audit | OverdueDetected | TaskCreated (проверка стикеров) |
-| **GoalService** | Goal Tracking | — | — |
-| **CompressionService** | Compression | — | ReviewGenerated |
+| Сервис | Сценарии | Вызывает (прямые вызовы) |
+|--------|----------|---------------------------|
+| **BoardService** | Quick Actions, Snapshot | — (владелец данных) |
+| **TaskService** | Quick Actions, Bulk Move, Batch Stickers, List | — |
+| **ReviewService** | Summarize | BoardService.GetBoardSnapshot |
+| **AuditService** | Audit | BoardService.GetBoardSnapshot, TaskService.MoveTask (autoMove) |
+| **GoalService** | Goal Tracking | BoardService.GetBoardSnapshot |
+| **CompressionService** | Compression | ReviewService.Summarize (если нет предыдущего отчёта) |
 
 ## MCP Tools (Planned)
 
@@ -398,7 +392,7 @@ type Handler func(context.Context, Event)
 | 1 | API Reference (справочник эндпоинтов, DTO, неопределённости) | ✅ done |
 | 2 | Определение пользовательских сценариев (business-first) → [`SCENARIOS.md`](SCENARIOS.md) | ✅ done |
 | 3 | Дизайн DDD сущностей на основе сценариев → [`DESIGN.md`](DESIGN.md) | ✅ done |
-| 4 | Дизайн доменных сервисов (Board, Task, Review, Audit, Goal, Compression) + Event Bus | ⏳ pending |
+| 4 | Дизайн доменных сервисов (Board, Task, Review, Audit, Goal, Compression) → [`SERVICES.md`](SERVICES.md). Прямые вызовы вместо Event Bus | ✅ done |
 | 5 | Дизайн кодовых решений (структура Go-пакетов, HTTP-клиент с RoundTripper, репозитории, MCP-интеграция, ADR) | ⏳ pending |
 | 6 | Дальнейшее планирование (порядок реализации, спринты, критерии готовности, тестирование) | ⏳ pending |
 
@@ -418,6 +412,7 @@ type Handler func(context.Context, Event)
 ## Git History
 
 ```
+5c991a3 docs: add scenarios and DDD design, complete plan steps 2-3
 5793f7f docs: restructure PLAN.md with 6-step DDD-first plan and regenerate AGENTS.md via init skill
 ca3deb1 docs: add user scenarios section and renumber plan steps
 86441f6 docs: add AGENTS.md with project overview and conventions
@@ -425,5 +420,3 @@ d77c5b1 Initial project scaffold: docs and plan
 ```
 
 **Ветка**: единственная (main/master). История плоская, без мерджей.
-
-> ⚠️ Не закоммичено: SCENARIOS.md, DESIGN.md, правки PLAN.md/AGENTS.md (шаги 2-3). Коммит — только по команде пользователя.

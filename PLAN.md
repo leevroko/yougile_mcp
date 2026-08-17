@@ -141,20 +141,20 @@
 
 ## 4. Дизайн доменных сервисов
 
+> ✅ **Статус: выполнен (шаг 4).** Дизайн-документ — [`SERVICES.md`](SERVICES.md).
+
 Определить сервисы на основе DDD-сущностей и пользовательских сценариев:
 
-- **BoardService** — CRUD досок и колонок, получение конфигурации доски
-- **TaskService** — CRUD задач, массовые операции (move, update stickers)
-- **ReviewService** — аналитика доски: группировка, метрики, weighted KR, форматированный отчёт
-- **AuditService** — поиск просрочки, задач без стикеров, авто-перемещение в Review
+- **BoardService** — CRUD досок и колонок, получение конфигурации доски, snapshot
+- **TaskService** — CRUD задач, массовые операции (move, update stickers), ListTasks с вложенными справочными
+- **ReviewService** — аналитика доски: группировка, метрики, рекомендации, since
+- **AuditService** — поиск просрочки, задач без стикеров, авто-перемещение в Review (rules, dryRun)
 - **GoalService** — отслеживание прогресса целей, weighted average KR
 - **CompressionService** — цепочка сжатия daily→weekly→monthly→yearly
 
-Также определить:
-- **События** — TaskCreated, TaskMoved, TaskCompleted, OverdueDetected, ReviewGenerated
-- **Event Bus** — in-memory pub/sub, подписки сервисов друг на друга
+> **Решение**: вместо Event Bus — **прямые вызовы** между сервисами (принцип Simplicity First, без спекулятивной асинхронности). Таблица связей — в SERVICES.md §9.
 
-**Результат**: Go-интерфейсы сервисов, структуры событий, спецификация Event Bus.
+**Результат**: Go-интерфейсы сервисов (в SERVICES.md).
 
 ---
 
