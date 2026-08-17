@@ -1,0 +1,14 @@
+# Binaries
+/bin/
+*.exe
+
+# Environment
+.env
+*.env
+
+# Memory (отчёты compression)
+/memory/
+
+# Go
+*.test
+*.out

@@ -160,28 +160,32 @@
 
 ## 5. Дизайн кодовых решений
 
-Архитектурные и технические решения для реализации спроектированной системы:
+> ✅ **Статус: реализовано (MVP).** Код — в `cmd/` и `internal/`.
 
-- **Go Package Structure** — инициализация Go-модуля, структура директорий в соответствии с DDD
-- **HTTP-клиент** — кастомный RoundTripper: Bearer auth → Token bucket rate limiter (50 req/min) → Retry с exponential backoff → HTTP transport
-- **Слой репозиториев** — интерфейсы в domain, HTTP-реализации в infrastructure. Обработка пагинации, маппинг HTTP-статусов в доменные ошибки.
-- **Экспериментальная верификация API** — реальные запросы к YouGile API для проверки неопределённостей из шага 1
-- **MCP-интеграция** — сопоставление сервисов с MCP-инструментами (12 инструментов: list_projects, list_boards, list_columns, list_tasks, create_task, update_task, bulk_move_tasks, batch_update_stickers, summarize_board, audit_board, track_goals, compress_reviews)
-- **Обработка ошибок** — иерархия доменных ошибок, маппинг HTTP-статусов
-- **Конфигурация** — API-ключ и companyId через переменные окружения
+Архитектурные и технические решения (все реализованы):
 
-**Результат**: Документированные решения (ADRs) и скорректированная структура пакетов.
+- **Go Package Structure** — модуль `github.com/yougile-mcp`, структура директорий по DDD: `internal/domain`, `internal/infrastructure`, `internal/service`, `internal/mcp`
+- **HTTP-клиент** — кастомный RoundTripper: Bearer auth → Token bucket rate limiter (50 req/min) → Retry с exponential backoff → HTTP transport (все в `internal/infrastructure/http`)
+- **Слой репозиториев** — интерфейсы в domain, HTTP-реализации в infrastructure. Обработка пагинации, маппинг HTTP-статусов в доменные ошибки (`internal/infrastructure/repository`)
+- **Экспериментальная верификация API** — ⏳ не выполнена: неопределённости из шага 1 (раздел 19 API_REFERENCE.md) требуют реальных запросов
+- **MCP-интеграция** — 15 инструментов двух слоёв (8 CRUD + 7 композитных), format json|markdown, markdown-рендер (TL;DR), дельта `since`, dryRun (`internal/mcp`)
+- **Обработка ошибок** — доменные ошибки в `internal/domain/domainerr`, маппинг HTTP-статусов (404→ErrNotFound, 429→ErrRateLimited, ...)
+- **Конфигурация** — `YOUGILE_API_KEY`, `YOUGILE_BASE_URL`, `YOUGILE_MEMORY_DIR` через переменные окружения
+
+**Результат**: реализован MVP MCP-сервера (сборка, тесты, запуск — см. Quick Start в AGENTS.md).
 
 ---
 
 ## 6. Дальнейшее планирование
 
-После завершения дизайна (шаги 1-5) — разбить реализацию на конкретные итерации:
+> ⏳ **Не завершено.** Планирование итераций — следующий шаг после проверки MVP на реальном API.
 
-1. Определить порядок реализации сущностей (например, User → Project → Board → Column → Task → Sticker)
-2. Разбить на недельные спринты
-3. Определить критерии готовности каждого этапа
-4. Спланировать тестирование (unit, интеграционное, E2E с реальным API)
-5. Оценить необходимость CI/CD, линтеров, pre-commit хуков
+Разбить дальнейшую работу на итерации:
+
+1. **Экспериментальная верификация API** — проверить неопределённости (раздел 19 API_REFERENCE.md): `GET /tasks?boardId=` без columnId, формат ошибок, `stickers.custom`
+2. **Интеграционные тесты** — с реальным API (создание/перемещение задач)
+3. **Итерации реализации** — порядок сущностей (User → Project → Board → Column → Task → Sticker)
+4. **Критерии готовности** каждого этапа
+5. **CI/CD, линтеры, pre-commit хуки** — оценить необходимость
 
 **Результат**: Дорожная карта (roadmap) с конкретными сроками и вехами.

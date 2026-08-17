@@ -44,34 +44,28 @@
 MCP-сервер на Go для интеграции ИИ-ассистента с YouGile REST API v2.
 Замена существующих OpenClaw-скиллов и Python-скриптов (легаси-скрипты проанализированы в `LEGACY_PROJECT_STATE.md`).
 
-Проект находится на стадии **архитектурного проектирования** — реализована только документация.
-Исходный код Go ещё не написан: нет `go.mod`, нет `.go` файлов, нет пакетов.
+Проект прошёл фазу проектирования (docs: `API_REFERENCE.md`, `PLAN.md`, `SCENARIOS.md`, `DESIGN.md`, `SERVICES.md`) и перешёл к реализации. **MVP реализован**: DDD-слои, HTTP-клиент с RoundTripper, 6 сервисов, MCP-сервер с 15 инструментами.
 
-> ⚠️ **Статус проекта**: Pre-alpha (только документация). Все описания архитектуры ниже — plan/design, не реализация.
+> ⚠️ **Статус проекта**: MVP (реализован, не протестирован на реальном API). Неопределённости API — в `API_REFERENCE.md` раздел 19.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Инициализация Go-модуля (ещё не выполнена)
-go mod init github.com/yougile-mcp
+# Сборка
+make build   # или: go build ./cmd/yougile-mcp
 
-# Go-версия (план): 1.25
-go version
-
-# Сборка (план)
-go build ./...
-
-# Тестирование (план)
+# Тестирование
 go test ./...
 
-# Запуск (план)
+# Запуск (MCP-сервер, stdio)
 export YOUGILE_API_KEY=your-api-key
-export YOUGILE_COMPANY_ID=your-company-id
+# YOUGILE_BASE_URL=https://ru.yougile.com/api-v2 (по умолчанию)
+# YOUGILE_MEMORY_DIR=memory/reviews (по умолчанию)
 go run ./cmd/yougile-mcp
 
-# Проверка стиля и ошибок (план)
+# Проверка стиля и ошибок
 go vet ./...
 go fmt ./...
 ```
@@ -90,38 +84,33 @@ yougile-mcp/
 ├── PLAN.md                  # Поэтапный план реализации MCP-сервера
 ├── SCENARIOS.md             # Спецификации 7 пользовательских сценариев (шаг 2)
 ├── DESIGN.md                # DDD-дизайн: value objects, entities, aggregates, репозитории (шаг 3)
-├── SERVICES.md              # Дизайн доменных сервисов: Board, Task, Review, Audit, Goal, Compression (шаг 4)
-└── .git/                    # Git-репозиторий (5 коммитов)
-```
-
-### Planned (целевая структура)
-
-> ⚠️ Нижеописанная структура является проектной — не реализована.
-
-```
-yougile-mcp/
+├── SERVICES.md              # Дизайн доменных сервисов (шаг 4)
+├── go.mod / go.sum          # Модуль Go (go 1.26.4, зависимость mcp-go v0.58.0)
 ├── cmd/
-│   └── yougile-mcp/             # Точка входа (main.go)
+│   └── yougile-mcp/main.go  # Точка входа: DI, запуск MCP-сервера (stdio)
 ├── internal/
-│   ├── domain/                  # DDD: value objects, entities, repository interfaces
-│   │   ├── project/             # Project entity + repository interface
-│   │   ├── board/               # Board entity + repository interface
-│   │   ├── column/              # Column entity + repository interface
-│   │   ├── task/                # Task entity + repository interface
-│   │   ├── sticker/             # Sticker (old), StringSticker, SprintSticker
-│   │   ├── user/                # User entity + repository interface
-│   │   └── valueobject/         # PagingMetadata, enums (role, color, type)
-│   ├── infrastructure/          # Реализации
-│   │   ├── http/                # HTTP-клиент, RoundTripper (auth, rate limit, retry)
-│   │   └── repository/          # HTTP-реализации репозиториев
-│   ├── service/                 # Доменные сервисы (Board, Task, Review, Audit, Goal, Compression)
-│   ├── event/                   # In-memory event bus (TaskCreated, TaskMoved, OverdueDetected, etc.)
-│   └── mcp/                     # MCP server, tools, handlers
-│
-├── API_REFERENCE.md             # Справочник YouGile API v2
-├── LEGACY_PROJECT_STATE.md      # Анализ легаси-кода
-├── PLAN.md                      # План реализации
-└── AGENTS.md                    # Этот файл
+│   ├── domain/              # DDD: сущности + repository interfaces
+│   │   ├── project/         # Project entity + Repository
+│   │   ├── board/           # Board + Aggregate (snapshot)
+│   │   ├── column/          # Column + Repository
+│   │   ├── task/            # Task + Repository (частичное обновление)
+│   │   ├── sticker/         # Sticker, StringSticker, SprintSticker
+│   │   ├── user/            # User + Repository
+│   │   ├── goal/            # Goal + Aggregate (weighted KR)
+│   │   ├── domainerr/       # Доменные ошибки (маппинг HTTP-статусов)
+│   │   └── valueobject/     # ID, PagingMetadata, Deadline, Color, Role, StickerType
+│   ├── infrastructure/
+│   │   ├── http/            # HTTP-клиент: RoundTripper (auth → rate limit → retry)
+│   │   └── repository/      # HTTP-реализации репозиториев (пагинация, DTO)
+│   ├── service/             # Доменные сервисы (прямые вызовы, без Event Bus)
+│   │   ├── board/           # CRUD + GetBoardSnapshot
+│   │   ├── task/            # CRUD + ListTasks + BulkMove + BatchStickers
+│   │   ├── review/          # Summarize
+│   │   ├── audit/           # Audit (overdue, стикеры, autoMove)
+│   │   ├── goal/            # TrackGoals / WeightedKR
+│   │   └── compression/     # Compress (daily→weekly→...)
+│   └── mcp/                 # MCP-сервер: 15 инструментов, markdown-рендер
+└── .git/                    # Git-репозиторий (6 коммитов, MVP не закоммичен)
 ```
 
 ---
@@ -140,19 +129,22 @@ yougile-mcp/
 | `SERVICES.md` | Дизайн доменных сервисов (шаг 4): Board, Task, Review, Audit, Goal, Compression с интерфейсами и логикой. Прямые вызовы вместо Event Bus. |
 | `AGENTS.md` | Этот файл — ориентация агентов в проекте. |
 
-### Целевые файлы (planned)
+### Реализованные файлы (код)
 
 | Файл | Назначение |
 |------|------------|
-| `cmd/yougile-mcp/main.go` | Точка входа: DI-контейнер, настройка HTTP-клиента, инициализация репозиториев/сервисов, запуск MCP-сервера |
+| `cmd/yougile-mcp/main.go` | Точка входа: DI-контейнер, настройка HTTP-клиента, инициализация репозиториев/сервисов, запуск MCP-сервера (stdio) |
 | `internal/infrastructure/http/` | Кастомный `RoundTripper`: Bearer auth + Token bucket rate limiter (50 req/min) + retry с exponential backoff |
 | `internal/infrastructure/http/client.go` | Фабрика HTTP-клиента с настроенным RoundTripper |
+| `internal/infrastructure/repository/` | HTTP-реализации репозиториев: task, board, column, sticker, project, user (пагинация, DTO-маппинг) |
+| `internal/service/` | Доменные сервисы: board, task, review, audit, goal, compression |
+| `internal/mcp/` | MCP-сервер: 15 инструментов (8 CRUD + 7 композитных), markdown-рендер, format json\|markdown |
 
 ---
 
 ## Architecture
 
-### DDD Layering (planned)
+### DDD Layering (реализовано)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -246,7 +238,7 @@ import (
 
 ---
 
-## Architecture Patterns (Planned)
+## Architecture Patterns (реализовано)
 
 ### Repository Pattern
 
@@ -306,17 +298,11 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 
 | Зависимость | Назначение | Статус |
 |-------------|------------|--------|
-| Go (1.25) | Язык реализации | ✅ установлен (плановая версия) |
-| `github.com/mark3labs/mcp-go` | MCP SDK для Go | ⏳ будет добавлено |
-| Стандартная библиотека | HTTP-клиент, тесты, форматирование | ✅ встроено |
+| Go (1.26.4) | Язык реализации | ✅ установлен |
+| `github.com/mark3labs/mcp-go` v0.58.0 | MCP-сервер, инструменты, транспорты | ✅ добавлен (единственная внешняя) |
+| Стандартная библиотека | HTTP-клиент, rate limiting, retry, пагинация, тесты | ✅ встроено |
 
-### Planned (будущие)
-
-| Пакет | Назначение | Причина |
-|-------|------------|---------|
-| `github.com/mark3labs/mcp-go` | MCP-сервер, инструменты, транспорты | Единственная внешняя зависимость |
-
-**Принцип**: минимум зависимостей. HTTP-клиент, rate limiting, retry, пагинация, DTO-маппинг — всё на стандартной библиотеке.
+**Принцип**: минимум зависимостей. HTTP-клиент, rate limiting, retry, пагинация, DTO-маппинг — всё на стандартной библиотеке. Транзитивные зависимости mcp-go — в `go.sum` (jsonschema, uuid, и т.д.).
 
 ---
 
@@ -326,8 +312,8 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 |-------------|------------|--------|
 | `AGENTS.md` | Первичная точка входа для агента — ориентация в проекте | ✅ actual |
 | `PLAN.md` | Определение текущего шага реализации | ✅ actual |
-| `cmd/yougile-mcp/main.go` | Точка входа сервера: DI, запуск MCP | ⏳ planned |
-| `internal/infrastructure/http/client.go` | Создание настроенного HTTP-клиента | ⏳ planned (design step 5) |
+| `cmd/yougile-mcp/main.go` | Точка входа сервера: DI, запуск MCP (stdio) | ✅ реализовано |
+| `internal/infrastructure/http/client.go` | Создание настроенного HTTP-клиента (RoundTripper) | ✅ реализовано |
 
 ---
 
@@ -343,7 +329,7 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 | **Batch Stickers** | Массовое обновление стикеров у группы задач | отсутствовало |
 | **Compression** | Цепочка: daily → weekly → monthly → yearly review | `review-compression.md` |
 
-## Services (Planned)
+## Services (реализовано)
 
 | Сервис | Сценарии | Вызывает (прямые вызовы) |
 |--------|----------|---------------------------|
@@ -354,7 +340,7 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 | **GoalService** | Goal Tracking | BoardService.GetBoardSnapshot |
 | **CompressionService** | Compression | ReviewService.Summarize (если нет предыдущего отчёта) |
 
-## MCP Tools (Planned)
+## MCP Tools (реализовано)
 
 > Два слоя: тонкий CRUD + композитные (1 вызов покрывает весь сценарий). Аналитика принимает `format: json|markdown` (по умолчанию markdown, TL;DR сверху), CRUD возвращает JSON. Композитные принимают `since` для дельта-обновлений. Подробности — PLAN.md шаг 2.
 
@@ -385,16 +371,16 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 
 ## Design Plan (из PLAN.md)
 
-> Проект в фазе **архитектурного проектирования**. Шаги 2-5 — блокирующие: никакая реализация (Go-код) не начинается, пока дизайн не завершён.
+> Проект перешёл от проектирования к реализации. MVP реализован (см. структуру выше).
 
 | Шаг | Компоненты | Статус |
 |-----|------------|--------|
 | 1 | API Reference (справочник эндпоинтов, DTO, неопределённости) | ✅ done |
 | 2 | Определение пользовательских сценариев (business-first) → [`SCENARIOS.md`](SCENARIOS.md) | ✅ done |
 | 3 | Дизайн DDD сущностей на основе сценариев → [`DESIGN.md`](DESIGN.md) | ✅ done |
-| 4 | Дизайн доменных сервисов (Board, Task, Review, Audit, Goal, Compression) → [`SERVICES.md`](SERVICES.md). Прямые вызовы вместо Event Bus | ✅ done |
-| 5 | Дизайн кодовых решений (структура Go-пакетов, HTTP-клиент с RoundTripper, репозитории, MCP-интеграция, ADR) | ⏳ pending |
-| 6 | Дальнейшее планирование (порядок реализации, спринты, критерии готовности, тестирование) | ⏳ pending |
+| 4 | Дизайн доменных сервисов → [`SERVICES.md`](SERVICES.md). Прямые вызовы вместо Event Bus | ✅ done |
+| 5 | Кодовые решения → **реализовано**: HTTP-клиент (RoundTripper), репозитории, 6 сервисов, MCP (15 инструментов) | ✅ done (MVP) |
+| 6 | Дальнейшее планирование (порядок реализации, спринты, тестирование) | ⏳ pending |
 
 ## Known API Uncertainties
 
