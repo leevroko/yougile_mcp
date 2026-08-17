@@ -1,0 +1,13 @@
+{
+  "name": "yougile-mcp-extension",
+  "version": "0.1.0",
+  "description": "pi extension: connect to yougile-mcp MCP server via stdio",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}

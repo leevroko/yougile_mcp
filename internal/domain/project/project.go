@@ -3,6 +3,7 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/yougile-mcp/internal/domain/valueobject"
 )
@@ -14,6 +15,27 @@ type Project struct {
 	Timestamp int64
 	Users     map[valueobject.UserID]valueobject.Role // userId: role
 	Deleted   bool
+}
+
+// MarshalJSON сериализует Project, приводя ключи Users к строкам.
+func (p Project) MarshalJSON() ([]byte, error) {
+	users := make(map[string]valueobject.Role, len(p.Users))
+	for k, v := range p.Users {
+		users[k.String()] = v
+	}
+	return json.Marshal(struct {
+		ID        string                      `json:"id"`
+		Title     string                      `json:"title"`
+		Timestamp int64                       `json:"timestamp"`
+		Users     map[string]valueobject.Role `json:"users"`
+		Deleted   bool                        `json:"deleted"`
+	}{
+		ID:        p.ID.String(),
+		Title:     p.Title,
+		Timestamp: p.Timestamp,
+		Users:     users,
+		Deleted:   p.Deleted,
+	})
 }
 
 // Repository — интерфейс доступа к проектам.

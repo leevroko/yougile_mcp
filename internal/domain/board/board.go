@@ -10,11 +10,11 @@ import (
 
 // Board — доска (Kanban).
 type Board struct {
-	ID        valueobject.BoardID
-	Title     string
-	ProjectID valueobject.ProjectID
-	Stickers  []StickerSetting // настройки кастомных стикеров доски
-	Deleted   bool
+	ID        valueobject.BoardID   `json:"id"`
+	Title     string                `json:"title"`
+	ProjectID valueobject.ProjectID `json:"projectId"`
+	Stickers  []StickerSetting      `json:"stickers"`
+	Deleted   bool                  `json:"deleted"`
 }
 
 // StickerSetting — настройка одного кастомного стикера доски.
@@ -61,25 +61,25 @@ type UpdateRequest struct {
 // Aggregate — доска с колонками, задачами и легендой стикеров.
 // Используется сценариями Summarize/Audit/Goal Tracking (snapshot).
 type Aggregate struct {
-	Board    Board
-	Columns  []Column
-	Tasks    []task.Task
-	Stickers []Sticker // легенда для расшифровки
+	Board    Board       `json:"board"`
+	Columns  []Column    `json:"columns"`
+	Tasks    []task.Task `json:"tasks"`
+	Stickers []Sticker   `json:"stickers"` // легенда для расшифровки
 }
 
 // Column — колонка доски (в домене board для Aggregate).
 type Column struct {
-	ID      valueobject.ColumnID
-	Title   string
-	BoardID valueobject.BoardID
-	Color   valueobject.ColumnColor
-	Deleted bool
+	ID      valueobject.ColumnID    `json:"id"`
+	Title   string                  `json:"title"`
+	BoardID valueobject.BoardID     `json:"boardId"`
+	Color   valueobject.ColumnColor `json:"color"`
+	Deleted bool                    `json:"deleted"`
 }
 
 // Sticker — легенда стикера (в домене board для Aggregate).
 type Sticker struct {
-	ID      valueobject.StickerID
-	Title   string
-	Type    valueobject.StickerType
-	Options []StickerOption
+	ID      valueobject.StickerID   `json:"id"`
+	Title   string                  `json:"title"`
+	Type    valueobject.StickerType `json:"type"`
+	Options []StickerOption         `json:"options"`
 }

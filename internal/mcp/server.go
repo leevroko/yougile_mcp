@@ -167,9 +167,13 @@ func (s *Server) registerTools() {
 func (s *Server) handleListProjects(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	projects, _, err := s.board.ListProjects(ctx)
 	if err != nil {
-		return textResult(fmt.Sprintf("Ошибка: %v", err)), nil
+		return errResult(err), nil
 	}
-	return textResult(fmt.Sprintf("%d проектов", len(projects))), nil
+	data, err := toJSON(projects)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(data), nil
 }
 
 func (s *Server) handleListBoards(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -182,7 +186,11 @@ func (s *Server) handleListBoards(ctx context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return errResult(err), nil
 	}
-	return textResult(fmt.Sprintf("%d досок", len(boards))), nil
+	data, err := toJSON(boards)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(data), nil
 }
 
 func (s *Server) handleListColumns(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -195,7 +203,10 @@ func (s *Server) handleListColumns(ctx context.Context, req mcp.CallToolRequest)
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(cols)
+	data, err := toJSON(cols)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -222,7 +233,10 @@ func (s *Server) handleListTasks(ctx context.Context, req mcp.CallToolRequest) (
 	if f == formatMarkdown {
 		return textResult(renderTasksMarkdown(res)), nil
 	}
-	data, _ := toJSON(res)
+	data, err := toJSON(res)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -236,7 +250,10 @@ func (s *Server) handleGetTask(ctx context.Context, req mcp.CallToolRequest) (*m
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(t)
+	data, err := toJSON(t)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -312,7 +329,10 @@ func (s *Server) handleGetStickers(ctx context.Context, req mcp.CallToolRequest)
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(st)
+	data, err := toJSON(st)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -337,7 +357,10 @@ func (s *Server) handleGetBoardSnapshot(ctx context.Context, req mcp.CallToolReq
 	if f == formatMarkdown {
 		return textResult(renderSnapshotMarkdown(snap)), nil
 	}
-	data, _ := toJSON(snap)
+	data, err := toJSON(snap)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -360,7 +383,10 @@ func (s *Server) handleSummarizeBoard(ctx context.Context, req mcp.CallToolReque
 	if f == formatMarkdown {
 		return textResult(renderSummary(sum)), nil
 	}
-	data, _ := toJSON(sum)
+	data, err := toJSON(sum)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -386,7 +412,10 @@ func (s *Server) handleAuditBoard(ctx context.Context, req mcp.CallToolRequest) 
 	if f == formatMarkdown {
 		return textResult(renderAudit(res)), nil
 	}
-	data, _ := toJSON(res)
+	data, err := toJSON(res)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -412,7 +441,10 @@ func (s *Server) handleTrackGoals(ctx context.Context, req mcp.CallToolRequest) 
 	if f == formatMarkdown {
 		return textResult(renderGoals(views)), nil
 	}
-	data, _ := toJSON(views)
+	data, err := toJSON(views)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -443,7 +475,10 @@ func (s *Server) handleBulkMove(ctx context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(res)
+	data, err := toJSON(res)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -496,7 +531,10 @@ func (s *Server) handleBatchStickers(ctx context.Context, req mcp.CallToolReques
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(res)
+	data, err := toJSON(res)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 
@@ -510,7 +548,10 @@ func (s *Server) handleCompress(ctx context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return errResult(err), nil
 	}
-	data, _ := toJSON(res)
+	data, err := toJSON(res)
+	if err != nil {
+		return errResult(err), nil
+	}
 	return textResult(data), nil
 }
 

@@ -3,6 +3,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -48,6 +49,23 @@ type ListResult struct {
 	Tasks      []domaintask.Task
 	Columns    []domaincolumn.Column                           // названия колонок
 	StickerMap map[valueobject.StickerID]domainsticker.Sticker // легенда
+}
+
+// MarshalJSON сериализует ListResult, приводя ключи StickerMap к строкам.
+func (r ListResult) MarshalJSON() ([]byte, error) {
+	stickerMap := make(map[string]domainsticker.Sticker, len(r.StickerMap))
+	for k, v := range r.StickerMap {
+		stickerMap[k.String()] = v
+	}
+	return json.Marshal(struct {
+		Tasks      []domaintask.Task                `json:"tasks"`
+		Columns    []domaincolumn.Column            `json:"columns"`
+		StickerMap map[string]domainsticker.Sticker `json:"stickerMap"`
+	}{
+		Tasks:      r.Tasks,
+		Columns:    r.Columns,
+		StickerMap: stickerMap,
+	})
 }
 
 // BulkMoveParams — параметры массового перемещения.
@@ -129,15 +147,29 @@ func (s *service) DeleteTask(ctx context.Context, taskID valueobject.TaskID) err
 
 // ListTasks возвращает задачи с вложенными колонками и легендой стикеров.
 func (s *service) ListTasks(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID) (ListResult, error) {
-	filter := domaintask.Filter{BoardID: &boardID, ColumnID: columnID, Limit: 100}
-	tasks, _, err := s.tasks.List(ctx, filter)
+	cols, _, err := s.columns.List(ctx, boardID)
 	if err != nil {
 		return ListResult{}, err
 	}
 
-	cols, _, err := s.columns.List(ctx, boardID)
-	if err != nil {
-		return ListResult{}, err
+	// Обход задач: по конкретной колонке или по всем (API требует columnId).
+	tasks := make([]domaintask.Task, 0)
+	if columnID != nil {
+		filter := domaintask.Filter{BoardID: &boardID, ColumnID: columnID, Limit: 100}
+		tasks, _, err = s.tasks.List(ctx, filter)
+		if err != nil {
+			return ListResult{}, err
+		}
+	} else {
+		for _, c := range cols {
+			colID := c.ID
+			filter := domaintask.Filter{BoardID: &boardID, ColumnID: &colID, Limit: 100}
+			colTasks, _, err := s.tasks.List(ctx, filter)
+			if err != nil {
+				return ListResult{}, err
+			}
+			tasks = append(tasks, colTasks...)
+		}
 	}
 
 	st, err := s.stickers.List(ctx, boardID)
@@ -158,15 +190,36 @@ func (s *service) BulkMove(ctx context.Context, req BulkMoveParams) (BulkMoveRes
 
 	// Определить задачи для перемещения
 	taskIDs := req.TaskIDs
-	if req.SourceColumnID != nil {
-		filter := domaintask.Filter{BoardID: &req.BoardID, ColumnID: req.SourceColumnID, Limit: 100}
-		srcTasks, _, err := s.tasks.List(ctx, filter)
-		if err != nil {
-			return result, err
+	if len(taskIDs) == 0 {
+		// Источник не задан и явных задач нет — собрать из колонки или всех колонок.
+		sourceFilter := func(colID *valueobject.ColumnID) ([]domaintask.Task, error) {
+			filter := domaintask.Filter{BoardID: &req.BoardID, ColumnID: colID, Limit: 100}
+			tasks, _, err := s.tasks.List(ctx, filter)
+			return tasks, err
 		}
-		taskIDs = make([]valueobject.TaskID, 0, len(srcTasks))
-		for _, t := range srcTasks {
-			taskIDs = append(taskIDs, t.ID)
+		if req.SourceColumnID != nil {
+			srcTasks, err := sourceFilter(req.SourceColumnID)
+			if err != nil {
+				return result, err
+			}
+			for _, t := range srcTasks {
+				taskIDs = append(taskIDs, t.ID)
+			}
+		} else {
+			cols, _, err := s.columns.List(ctx, req.BoardID)
+			if err != nil {
+				return result, err
+			}
+			for _, c := range cols {
+				colID := c.ID
+				srcTasks, err := sourceFilter(&colID)
+				if err != nil {
+					return result, err
+				}
+				for _, t := range srcTasks {
+					taskIDs = append(taskIDs, t.ID)
+				}
+			}
 		}
 	}
 

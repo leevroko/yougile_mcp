@@ -3,6 +3,7 @@
 package valueobject
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -39,6 +40,25 @@ func MustID(s string) ID {
 
 // String возвращает строковое представление ID.
 func (id ID) String() string { return id.value }
+
+// MarshalJSON сериализует ID как строку.
+func (id ID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(id.value)
+}
+
+// UnmarshalJSON десериализует ID из строки.
+func (id *ID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := NewID(s)
+	if err != nil {
+		return err
+	}
+	*id = parsed
+	return nil
+}
 
 // IsZero возвращает true, если ID пустой (нулевое значение).
 func (id ID) IsZero() bool { return id.value == "" }
@@ -157,3 +177,34 @@ func NewStateID(s string) (StateID, error) {
 	}
 	return StateID(id), nil
 }
+
+// ── JSON-маршаллинг для типизированных ID ──
+// Каждый типизированный ID сериализуется как строка.
+// (type X ID не наследует методы базового ID, поэтому реализуем явно.)
+
+type jsonID interface {
+	String() string
+}
+
+func marshalJSONID(id jsonID) ([]byte, error) {
+	return json.Marshal(id.String())
+}
+
+func unmarshalJSONID(data []byte, makeFn func(string) (jsonID, error)) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	_, err := makeFn(s)
+	return err
+}
+
+func (id ProjectID) MarshalJSON() ([]byte, error)       { return marshalJSONID(id) }
+func (id BoardID) MarshalJSON() ([]byte, error)         { return marshalJSONID(id) }
+func (id ColumnID) MarshalJSON() ([]byte, error)        { return marshalJSONID(id) }
+func (id TaskID) MarshalJSON() ([]byte, error)          { return marshalJSONID(id) }
+func (id UserID) MarshalJSON() ([]byte, error)          { return marshalJSONID(id) }
+func (id StickerID) MarshalJSON() ([]byte, error)       { return marshalJSONID(id) }
+func (id StringStickerID) MarshalJSON() ([]byte, error) { return marshalJSONID(id) }
+func (id SprintStickerID) MarshalJSON() ([]byte, error) { return marshalJSONID(id) }
+func (id StateID) MarshalJSON() ([]byte, error)         { return marshalJSONID(id) }

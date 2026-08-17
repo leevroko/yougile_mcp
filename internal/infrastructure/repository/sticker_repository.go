@@ -2,13 +2,23 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
+	"github.com/yougile-mcp/internal/domain/domainerr"
 	"github.com/yougile-mcp/internal/domain/sticker"
 	"github.com/yougile-mcp/internal/domain/valueobject"
 )
 
-// stickerRepository — HTTP-реализация sticker.Repository (старые /stickers).
+// Алиасы доменных ошибок.
+var (
+	ErrNotFound     = domainerr.ErrNotFound
+	ErrNotSupported = errors.New("not supported for string-stickers")
+)
+
+// stickerRepository — HTTP-реализация sticker.Repository.
+// Легенда стикеров берётся из /string-stickers (новый механизм) +
+// фильтруется по stickers.custom из /boards/{id}.
 type stickerRepository struct {
 	client *client
 }
@@ -18,125 +28,143 @@ func NewStickerRepository(hc *http.Client, baseURL string) sticker.Repository {
 	return &stickerRepository{client: newClient(hc, baseURL)}
 }
 
-// stickerDTO — кастомный стикер из ответа API.
-type stickerDTO struct {
-	ID      string          `json:"id"`
-	Title   string          `json:"title"`
-	Type    string          `json:"type"`
-	BoardID string          `json:"boardId"`
-	Options []stickerOption `json:"options"`
+// stringStickerDTO — стикер из /string-stickers.
+type stringStickerDTO struct {
+	ID      string                  `json:"id"`
+	Name    string                  `json:"name"`
+	Icon    string                  `json:"icon"`
+	States  []stringStickerStateDTO `json:"states"`
+	Deleted *bool                   `json:"deleted"`
 }
 
-// stickerOption — опция select-стикера.
-type stickerOption struct {
-	ID    string  `json:"id"`
-	Title string  `json:"title"`
-	Color *string `json:"color"`
+// stringStickerStateDTO — состояние string-стикера.
+type stringStickerStateDTO struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Color   *string `json:"color"`
+	Deleted *bool   `json:"deleted"`
 }
 
-func (d stickerDTO) toDomain() (sticker.Sticker, error) {
-	id, err := valueobject.NewStickerID(d.ID)
-	if err != nil {
-		return sticker.Sticker{}, err
+// stringStickerListDTO — ответ /string-stickers.
+type stringStickerListDTO struct {
+	Paging  pagingDTO          `json:"paging"`
+	Content []stringStickerDTO `json:"content"`
+}
+
+// boardStickersDTO — stickers.custom из /boards/{id}.
+type boardStickersDTO struct {
+	Stickers struct {
+		Custom map[string]bool `json:"custom"`
+	} `json:"stickers"`
+}
+
+// List возвращает стикеры доски (только кастомные из stickers.custom).
+func (r *stickerRepository) List(ctx context.Context, boardID valueobject.BoardID) ([]sticker.Sticker, error) {
+	// 1. Получить ID кастомных стикеров доски из /boards/{id}
+	var boardStickers boardStickersDTO
+	if err := r.client.get(ctx, "/boards/"+boardID.String(), &boardStickers); err != nil {
+		return nil, err
 	}
-	bid, err := valueobject.NewBoardID(d.BoardID)
-	if err != nil {
-		return sticker.Sticker{}, err
+	customIDs := boardStickers.Stickers.Custom
+
+	// 2. Получить все string-стикеры
+	var dto stringStickerListDTO
+	if err := r.client.get(ctx, "/string-stickers?limit=100", &dto); err != nil {
+		return nil, err
 	}
-	opts := make([]sticker.StickerOption, 0, len(d.Options))
-	for _, o := range d.Options {
-		oid, err := valueobject.NewStateID(o.ID)
+
+	// 3. Отфильтровать по custom ID и смапить
+	out := make([]sticker.Sticker, 0)
+	for _, s := range dto.Content {
+		if s.ID == "" || s.Deleted != nil && *s.Deleted {
+			continue
+		}
+		// Включить только если стикер принадлежит доске (есть в custom) ИЛИ custom пуст (неизвестно)
+		if len(customIDs) > 0 {
+			if _, ok := customIDs[s.ID]; !ok {
+				continue
+			}
+		}
+		sid, err := valueobject.NewStickerID(s.ID)
 		if err != nil {
 			continue
 		}
-		opts = append(opts, sticker.StickerOption{ID: oid, Title: o.Title, Color: o.Color})
-	}
-	return sticker.Sticker{
-		ID:      id,
-		Title:   d.Title,
-		Type:    valueobject.StickerType(d.Type),
-		BoardID: bid,
-		Options: opts,
-	}, nil
-}
-
-// List возвращает стикеры доски (массив, без paging).
-func (r *stickerRepository) List(ctx context.Context, boardID valueobject.BoardID) ([]sticker.Sticker, error) {
-	path := addQuery("/stickers", map[string]string{"boardId": boardID.String()})
-	var dto []stickerDTO
-	if err := r.client.get(ctx, path, &dto); err != nil {
-		return nil, err
-	}
-	out := make([]sticker.Sticker, 0, len(dto))
-	for _, s := range dto {
-		sv, err := s.toDomain()
-		if err != nil {
-			return nil, err
+		st := sticker.Sticker{
+			ID:      sid,
+			Title:   s.Name,
+			Type:    valueobject.StickerTypeSelect,
+			BoardID: boardID,
 		}
-		out = append(out, sv)
+		for _, state := range s.States {
+			if state.ID == "" || state.Deleted != nil && *state.Deleted {
+				continue
+			}
+			sid2, err := valueobject.NewStateID(state.ID)
+			if err != nil {
+				continue
+			}
+			st.Options = append(st.Options, sticker.StickerOption{
+				ID:    sid2,
+				Title: state.Name,
+				Color: state.Color,
+			})
+		}
+		out = append(out, st)
 	}
 	return out, nil
 }
 
-// GetByID возвращает стикер по ID.
+// GetByID возвращает стикер по ID (поиск по всем).
 func (r *stickerRepository) GetByID(ctx context.Context, id valueobject.StickerID) (sticker.Sticker, error) {
-	var dto stickerDTO
-	if err := r.client.get(ctx, "/stickers/"+id.String(), &dto); err != nil {
+	all, err := r.listAll(ctx)
+	if err != nil {
 		return sticker.Sticker{}, err
 	}
-	return dto.toDomain()
+	for _, s := range all {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return sticker.Sticker{}, ErrNotFound
 }
 
-// Create создаёт стикер.
+// Create — не поддерживается для /string-stickers (создание через отдельный API).
 func (r *stickerRepository) Create(ctx context.Context, req sticker.CreateRequest) (valueobject.StickerID, error) {
-	body := map[string]any{
-		"title":   req.Title,
-		"type":    string(req.Type),
-		"boardId": req.BoardID.String(),
-	}
-	if len(req.Options) > 0 {
-		opts := make([]map[string]any, 0, len(req.Options))
-		for _, o := range req.Options {
-			m := map[string]any{"title": o.Title}
-			if o.Color != nil {
-				m["color"] = *o.Color
-			}
-			opts = append(opts, m)
-		}
-		body["options"] = opts
-	}
-	var out struct {
-		ID string `json:"id"`
-	}
-	if err := r.client.post(ctx, "/stickers", body, &out); err != nil {
-		return valueobject.StickerID{}, err
-	}
-	id, err := valueobject.NewStickerID(out.ID)
-	if err != nil {
-		return valueobject.StickerID{}, err
-	}
-	return id, nil
+	return valueobject.StickerID{}, ErrNotSupported
 }
 
-// Update обновляет стикер (частично).
+// Update — не поддерживается для /string-stickers.
 func (r *stickerRepository) Update(ctx context.Context, id valueobject.StickerID, req sticker.UpdateRequest) error {
-	body := map[string]any{}
-	if req.Title != nil {
-		body["title"] = *req.Title
+	return ErrNotSupported
+}
+
+// listAll возвращает все string-стикеры (без фильтра по доске).
+func (r *stickerRepository) listAll(ctx context.Context) ([]sticker.Sticker, error) {
+	var dto stringStickerListDTO
+	if err := r.client.get(ctx, "/string-stickers?limit=100", &dto); err != nil {
+		return nil, err
 	}
-	if req.Type != nil {
-		body["type"] = string(*req.Type)
-	}
-	if req.Options != nil {
-		opts := make([]map[string]any, 0, len(*req.Options))
-		for _, o := range *req.Options {
-			m := map[string]any{"title": o.Title}
-			if o.Color != nil {
-				m["color"] = *o.Color
-			}
-			opts = append(opts, m)
+	out := make([]sticker.Sticker, 0, len(dto.Content))
+	for _, s := range dto.Content {
+		if s.ID == "" || s.Deleted != nil && *s.Deleted {
+			continue
 		}
-		body["options"] = opts
+		sid, err := valueobject.NewStickerID(s.ID)
+		if err != nil {
+			continue
+		}
+		st := sticker.Sticker{ID: sid, Title: s.Name, Type: valueobject.StickerTypeSelect}
+		for _, state := range s.States {
+			if state.ID == "" {
+				continue
+			}
+			sid2, err := valueobject.NewStateID(state.ID)
+			if err != nil {
+				continue
+			}
+			st.Options = append(st.Options, sticker.StickerOption{ID: sid2, Title: state.Name, Color: state.Color})
+		}
+		out = append(out, st)
 	}
-	return r.client.put(ctx, "/stickers/"+id.String(), body, nil)
+	return out, nil
 }

@@ -76,25 +76,28 @@ func (s *service) GetBoardSnapshot(ctx context.Context, boardID valueobject.Boar
 		return board.Aggregate{}, err
 	}
 
-	// Полный обход задач доски (без columnId — все колонки сразу).
+	// Полный обход задач: по каждой колонке (API требует columnId — неопределённость №6 подтверждена).
 	all := make([]task.Task, 0)
-	offset := 0
-	for {
-		filter := task.Filter{BoardID: &boardID, Limit: 100, Offset: offset}
-		tasks, paging, err := s.tasks.List(ctx, filter)
-		if err != nil {
-			return board.Aggregate{}, err
-		}
-		for _, t := range tasks {
-			if since != nil && t.Timestamp < *since {
-				continue // дельта: пропустить не изменившиеся
+	for _, c := range cols {
+		colID := c.ID
+		offset := 0
+		for {
+			filter := task.Filter{BoardID: &boardID, ColumnID: &colID, Limit: 100, Offset: offset}
+			tasks, paging, err := s.tasks.List(ctx, filter)
+			if err != nil {
+				return board.Aggregate{}, err
 			}
-			all = append(all, t)
+			for _, t := range tasks {
+				if since != nil && t.Timestamp < *since {
+					continue // дельта: пропустить не изменившиеся
+				}
+				all = append(all, t)
+			}
+			if !paging.HasNext() || len(tasks) == 0 {
+				break
+			}
+			offset = paging.Offset + paging.Limit
 		}
-		if !paging.HasNext() || len(tasks) == 0 {
-			break
-		}
-		offset = paging.Offset + paging.Limit
 	}
 
 	st, err := s.stickers.List(ctx, boardID)

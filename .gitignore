@@ -12,3 +12,4 @@
 # Go
 *.test
 *.out
+node_modules/

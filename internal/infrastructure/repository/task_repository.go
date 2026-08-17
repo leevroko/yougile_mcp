@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -25,11 +26,10 @@ func (r *taskRepository) List(ctx context.Context, filter task.Filter) ([]task.T
 	var lastPaging valueobject.PagingMetadata
 
 	params := map[string]string{"limit": "100"}
-	if filter.BoardID != nil {
-		params["boardId"] = filter.BoardID.String()
-	}
 	if filter.ColumnID != nil {
 		params["columnId"] = filter.ColumnID.String()
+	} else {
+		return nil, valueobject.PagingMetadata{}, fmt.Errorf("repository: tasks list requires columnId (boardId not supported by API)")
 	}
 
 	offset := filter.Offset
