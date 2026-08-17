@@ -75,7 +75,8 @@ go fmt ./...
 ## Security & Config (кратко; подробно — SECURITY.md)
 
 - **Credentials вне env**: `~/.config/yougile-mcp/config.json` (каталог 700, файл 600). Загрузка: `--config` > `YOUGILE_CONFIG` (только путь) > дефолт. Миграция: `yougile-mcp init`. При неправильных правах сервер отказывается стартовать.
-- **Read-only**: `"read_only": true` → мутационные инструменты не регистрируются (10 из 15).
+- **Режимы**: `mode: read | confirm | yolo` в конфиге (или `set_mode` через MCP API / `/yougile-mode` в pi). read — только чтение; confirm — мутации с подтверждением; yolo — без подтверждений.
+- **Read-only**: `"read_only": true` (legacy) → эквивалент mode=read.
 - **Политика расширения**: `permissions.allow/confirm/deny` (glob) в конфиге; confirm — диалог пользователя, deny — невидим для LLM; bulk — dry-run-first.
 - **Аудит мутаций**: JSONL `~/.local/state/yougile-mcp/audit.jsonl` (tool, outcome, args).
 - **Команда pi**: `/yougile-status`.

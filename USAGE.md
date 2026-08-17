@@ -96,10 +96,11 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 | Что | Как |
 |-----|-----|
 | Ключ | `~/.config/yougile-mcp/config.json` (600), ротация — вручную в YouGile |
-| Запрет мутаций | `"read_only": true` в конфиге → 10 инструментов (только чтение) |
+| Режим | `mode: read|confirm|yolo` в конфиге, через MCP `set_mode`, или `/yougile-mode` в pi |
+| read | только чтение (мутации скрыты от LLM и блокируются сервером) |
+| confirm | каждая мутация — диалог подтверждения; bulk — dry-run-first |
+| yolo | все запросы разрешены без подтверждения |
 | Политика | `permissions.allow/confirm/deny` (glob) в конфиге |
-| Каждая мутация | диалог подтверждения в pi (confirm) |
-| Массовые | dry-run-first: план → подтверждение |
 | История мутаций | `~/.local/state/yougile-mcp/audit.jsonl` |
 | Текущее состояние | `/yougile-status` |
 

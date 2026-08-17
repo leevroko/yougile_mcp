@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/yougile-mcp/internal/audit"
+	"github.com/yougile-mcp/internal/config"
 	"github.com/yougile-mcp/internal/domain/board"
 	"github.com/yougile-mcp/internal/domain/task"
 	"github.com/yougile-mcp/internal/domain/valueobject"
@@ -31,8 +33,11 @@ type Deps struct {
 	AuditSvc    auditservice.Service
 	Goal        goalservice.Service
 	Compression compressionservice.Service
-	ReadOnly    bool         // read-only режим: мутационные инструменты не регистрируются
-	AuditLog    audit.Logger // аудит мутаций (nil → заглушка)
+	ReadOnly    bool           // legacy: read-only режим (мутации скрыты)
+	Mode        config.Mode    // read | confirm | yolo
+	Config      *config.Config // полный загруженный конфиг (для персиста режима без потери полей)
+	ConfigPath  string         // путь к конфигу для персиста режима
+	AuditLog    audit.Logger   // аудит мутаций (nil → заглушка)
 }
 
 // Server — MCP-сервер YouGile.
@@ -44,8 +49,37 @@ type Server struct {
 	audit    auditservice.Service
 	goal     goalservice.Service
 	comp     compressionservice.Service
-	readOnly bool
+	readOnly bool // legacy flag: если true — мутации скрыты
+	mode     config.Mode
+	cfgPath  string
+	cfg      *config.Config
 	auditLog audit.Logger
+	mu       sync.RWMutex
+}
+
+// Mode возвращает текущий режим.
+func (s *Server) Mode() config.Mode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode
+}
+
+// SetMode изменяет режим и персистит в конфиг-файл.
+func (s *Server) SetMode(m config.Mode) bool {
+	if !config.ValidMode(string(m)) {
+		return false
+	}
+	s.mu.Lock()
+	s.mode = m
+	if s.cfgPath != "" {
+		s.cfg.Mode = m
+		if err := s.cfg.SaveMode(m, s.cfgPath); err != nil {
+			s.mu.Unlock()
+			return false
+		}
+	}
+	s.mu.Unlock()
+	return true
 }
 
 // New создаёт MCP-сервер с зарегистрированными инструментами.
@@ -53,6 +87,20 @@ func New(deps Deps) *Server {
 	log := deps.AuditLog
 	if log == nil {
 		log = audit.NewNoopLogger()
+	}
+	cfg := deps.Config
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	if deps.Mode != "" {
+		cfg.Mode = deps.Mode
+	}
+	// legacy read_only=true → mode=read; иначе дефолт confirm
+	if deps.ReadOnly || cfg.Mode == config.ModeRead {
+		cfg.Mode = config.ModeRead
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = config.ModeConfirm
 	}
 	s := &Server{
 		mcp:      server.NewMCPServer("yougile-mcp", "0.1.0", server.WithToolCapabilities(false)),
@@ -63,6 +111,9 @@ func New(deps Deps) *Server {
 		goal:     deps.Goal,
 		comp:     deps.Compression,
 		readOnly: deps.ReadOnly,
+		mode:     cfg.Mode,
+		cfgPath:  deps.ConfigPath,
+		cfg:      cfg,
 		auditLog: log,
 	}
 	s.registerTools()
@@ -83,11 +134,21 @@ func (s *Server) registerTools() {
 	}
 	register := s.mcp.AddTool
 	mutating := func(tool mcp.Tool, name string, h server.ToolHandlerFunc) {
-		if s.readOnly {
-			return // не регистрируем вообще — LLM не видит
-		}
+		// Всегда регистрируем (даже в read) — блокировка в wrapMutating по режиму.
+		// Сокрытие от LLM — на стороне pi-расширения (setActiveTools).
 		s.mcp.AddTool(tool, s.wrapMutating(name, h))
 	}
+
+	// ── Режимы: set_mode / get_mode (всегда доступны, даже в read) ──
+	register(mcp.NewTool("get_mode",
+		ro(mcp.WithDescription("Текущий режим доступа: read | confirm | yolo"))...,
+	), s.handleGetMode)
+
+	mutating(mcp.NewTool("set_mode",
+		mut(mcp.WithDescription("Сменить режим: read (только чтение) | confirm (запись с подтверждением) | yolo (без подтверждений)"),
+			mcp.WithString("mode", mcp.Required(), mcp.Description("read | confirm | yolo")),
+		)...,
+	), "set_mode", s.handleSetMode)
 
 	// ── Слой 1: тонкий CRUD ──
 	register(mcp.NewTool("list_projects",
@@ -200,13 +261,14 @@ func (s *Server) registerTools() {
 	), s.handleCompress)
 }
 
-// wrapMutating оборачивает мутационный хендлер: аудит + read-only защита.
+// wrapMutating оборачивает мутационный хендлер: аудит + блокировка в read-режиме.
 func (s *Server) wrapMutating(name string, h server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
-		if s.readOnly {
-			res := errResult(errors.New("сервер в read-only режиме: мутации запрещены"))
-			s.auditLog.Log(name, "read-only-blocked", args)
+		// read-режим блокирует мутации, кроме set_mode (иначе не выйти из read).
+		if s.Mode() == config.ModeRead && name != "set_mode" {
+			res := errResult(errors.New("сервер в read-режиме: мутации запрещены. Вызовите set_mode для переключения"))
+			s.auditLog.Log(name, "read-blocked", args)
 			return res, nil
 		}
 		res, err := h(ctx, req)
@@ -686,4 +748,22 @@ func renderSnapshotMarkdown(snap board.Aggregate) string {
 		out += fmt.Sprintf("- **%s**: %d задач\n", c.Title, count)
 	}
 	return out
+}
+
+// handleGetMode — текущий режим доступа.
+func (s *Server) handleGetMode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return textResult(fmt.Sprintf(`{"mode": %q}`, string(s.Mode()))), nil
+}
+
+// handleSetMode — смена режима (read|confirm|yolo). Персистится в конфиг.
+func (s *Server) handleSetMode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	m := config.Mode(str(args, "mode"))
+	if !config.ValidMode(string(m)) {
+		return errResult(fmt.Errorf("невалидный режим %q: ожидается read|confirm|yolo", m)), nil
+	}
+	if !s.SetMode(m) {
+		return errResult(errors.New("не удалось сохранить режим в конфиг")), nil
+	}
+	return textResult(fmt.Sprintf(`{"mode": %q, "ok": true}`, string(m))), nil
 }

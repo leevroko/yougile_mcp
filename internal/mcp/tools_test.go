@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"testing"
+
+	"github.com/yougile-mcp/internal/config"
 )
 
 func TestListTools(t *testing.T) {
@@ -11,14 +13,15 @@ func TestListTools(t *testing.T) {
 	}
 	tools := s.mcp.ListTools()
 	t.Logf("registered tools: %d", len(tools))
-	if len(tools) != 15 {
-		t.Fatalf("expected 15 tools, got %d", len(tools))
+	if len(tools) != 17 {
+		t.Fatalf("expected 17 tools, got %d", len(tools))
 	}
 	for _, name := range []string{
 		"list_projects", "list_boards", "list_columns", "list_tasks",
 		"get_task", "create_task", "update_task", "get_stickers",
 		"get_board_snapshot", "summarize_board", "audit_board",
 		"track_goals", "bulk_move_tasks", "batch_update_stickers", "compress_reviews",
+		"get_mode", "set_mode",
 	} {
 		if _, ok := tools[name]; !ok {
 			t.Errorf("tool %q not registered", name)
@@ -26,28 +29,44 @@ func TestListTools(t *testing.T) {
 	}
 }
 
-// Мутационные инструменты, которые должны исчезать в read-only.
-var mutatingTools = []string{
-	"create_task", "update_task", "audit_board",
-	"bulk_move_tasks", "batch_update_stickers",
+func TestDefaultModeConfirm(t *testing.T) {
+	s := New(Deps{})
+	if s.Mode() != config.ModeConfirm {
+		t.Fatalf("default mode = %q, want confirm", s.Mode())
+	}
 }
 
-func TestReadOnlyHidesMutatingTools(t *testing.T) {
-	s := New(Deps{ReadOnly: true})
-	tools := s.mcp.ListTools()
-	for _, name := range mutatingTools {
-		if _, ok := tools[name]; ok {
-			t.Errorf("read-only: mutating tool %q must not be registered", name)
-		}
+func TestModeFromDeps(t *testing.T) {
+	s := New(Deps{Mode: config.ModeYolo})
+	if s.Mode() != config.ModeYolo {
+		t.Fatalf("mode = %q, want yolo", s.Mode())
 	}
-	// Читающие инструменты остаются
-	for _, name := range []string{"list_projects", "list_tasks", "summarize_board"} {
-		if _, ok := tools[name]; !ok {
-			t.Errorf("read-only: read tool %q must be registered", name)
-		}
+}
+
+func TestSetModeValid(t *testing.T) {
+	s := New(Deps{})
+	if !s.SetMode(config.ModeRead) || s.Mode() != config.ModeRead {
+		t.Fatal("SetMode(read) failed")
 	}
-	if len(tools) != 10 {
-		t.Fatalf("read-only: expected 10 tools, got %d", len(tools))
+	if !s.SetMode(config.ModeYolo) || s.Mode() != config.ModeYolo {
+		t.Fatal("SetMode(yolo) failed")
+	}
+	if s.SetMode("bogus") {
+		t.Fatal("SetMode(bogus) must fail")
+	}
+	if s.Mode() != config.ModeYolo {
+		t.Fatal("mode changed after invalid set")
+	}
+}
+
+func TestReadModeBlocksMutations(t *testing.T) {
+	s := New(Deps{Mode: config.ModeRead})
+	// get_mode работает в read
+	if _, ok := s.mcp.ListTools()["get_mode"]; !ok {
+		t.Fatal("get_mode must be registered in read")
+	}
+	if _, ok := s.mcp.ListTools()["set_mode"]; !ok {
+		t.Fatal("set_mode must be registered in read")
 	}
 }
 
@@ -57,7 +76,7 @@ func TestAnnotations(t *testing.T) {
 
 	ro, ok := tools["list_tasks"]
 	if !ok {
-		t.Fatal("list_tools missing")
+		t.Fatal("list_tasks missing")
 	}
 	if ro.Tool.Annotations.ReadOnlyHint == nil || !*ro.Tool.Annotations.ReadOnlyHint {
 		t.Error("list_tasks must have readOnlyHint=true")

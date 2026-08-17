@@ -1,17 +1,17 @@
 /**
  * yougile-mcp extension for pi
  *
- * Connects pi to the yougile-mcp MCP server (Go binary) over stdio
- * using the official @modelcontextprotocol/sdk Client.
- *
+ * Connects pi to the yougile-mcp MCP server (Go binary) over stdio.
  * Security model (see SECURITY.md in the yougile_mcp repo):
- *   - Credentials from ~/.config/yougile-mcp/config.json (chmod 600), NOT from env
- *   - Tool policy from the same config: allow / confirm / deny (glob patterns)
- *   - "confirm" tools ask the user before every call (ctx.ui.confirm)
- *   - bulk tools run dry-run first, show the plan, then ask to apply
- *   - "deny" tools are not registered at all
+ *   - credentials from ~/.config/yougile-mcp/config.json (chmod 600), NOT env
+ *   - tool policy from config: allow / confirm / deny (glob)
+ *   - three modes (server-side + reflected here):
+ *       read    → only read tools visible (mutations hidden via setActiveTools)
+ *       confirm → mutations ask the user (ctx.ui.confirm), bulk = dry-run first
+ *       yolo    → everything allowed, no prompts
+ *   - set_mode/get_mode MCP tools control the mode through the MCP API
  *
- * Commands: /yougile-status — current security state
+ * Commands: /yougile-status, /yougile-mode
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -28,8 +28,8 @@ interface YougileConfig {
   api_key: string;
   base_url?: string;
   memory_dir?: string;
-  read_only?: boolean;
-  allow_insecure?: boolean;
+  mode?: "read" | "confirm" | "yolo";
+  read_only?: boolean; // legacy
   bulk_dry_run_first?: boolean;
   permissions?: { allow?: string[]; confirm?: string[]; deny?: string[] };
   audit?: { enabled?: boolean; path?: string };
@@ -63,11 +63,11 @@ function resolveBinary(): string {
 
 const DEFAULT_ALLOW = [
   "list_*", "get_*", "get_board_snapshot", "summarize_board",
-  "track_goals", "compress_reviews",
+  "track_goals", "compress_reviews", "get_mode",
 ];
 const DEFAULT_CONFIRM = [
   "create_task", "update_task", "audit_board",
-  "bulk_move_tasks", "batch_update_stickers",
+  "bulk_move_tasks", "batch_update_stickers", "set_mode",
 ];
 
 // ── Glob matching (minimal, '*' wildcard) ──────────────────────────────
@@ -119,7 +119,7 @@ async function ensureConnected(): Promise<void> {
   connecting = (async () => {
     cfg = loadConfig();
     if (!cfg) {
-      connectError = `config not found at ${configPath()}. Run: yougile-mcp init (then remove YOUGILE_API_KEY from env)`;
+      connectError = `config not found at ${configPath()}. Run: yougile-mcp init`;
       return;
     }
     if (!cfg.api_key) {
@@ -135,13 +135,10 @@ async function ensureConnected(): Promise<void> {
       command: bin,
       args: [],
       env: {
-        // Only these vars reach the server process; never the full user env.
-        // YOUGILE_CONFIG is a PATH (not a secret): server reads the same config file itself.
-        // The API key itself never transits through env — server reads it from the file.
         YOUGILE_CONFIG: configPath(),
       },
     });
-    client = new Client({ name: "pi-yougile-mcp", version: "0.2.0" });
+    client = new Client({ name: "pi-yougile-mcp", version: "0.3.0" });
     await client.connect(transport);
     const res = await client.listTools();
     toolList = res.tools ?? [];
@@ -151,6 +148,18 @@ async function ensureConnected(): Promise<void> {
     await connecting;
   } finally {
     connecting = null;
+  }
+}
+
+async function currentMode(): Promise<string> {
+  if (!client) return "unknown";
+  try {
+    const res = await client.callTool({ name: "get_mode", arguments: {} });
+    const content = (res?.content ?? []) as any[];
+    const t = content.find((c: any) => c?.type === "text")?.text ?? "";
+    try { return JSON.parse(t).mode ?? "unknown"; } catch { return "unknown"; }
+  } catch {
+    return "unknown";
   }
 }
 
@@ -172,7 +181,7 @@ function firstText(result: any): string {
   return resultToContent(result)[0]?.text ?? "";
 }
 
-// JSON Schema → typebox (rough mapping, enough for MCP schemas)
+// JSON Schema → typebox (rough mapping)
 
 function jsonSchemaToTypebox(prop: any): any {
   switch (prop?.type) {
@@ -208,7 +217,19 @@ const DRY_RUN_FIRST = new Set(["bulk_move_tasks", "batch_update_stickers", "audi
 export default function yougileMcpExtension(pi: ExtensionAPI) {
   const registered: string[] = [];
   const denied: string[] = [];
-  const confirmed: string[] = [];
+  let mode: string = "unknown"; // read | confirm | yolo (from server)
+
+  const mutatingNames = new Set(
+    ["create_task", "update_task", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
+  );
+
+  function applyModeVisibility() {
+    if (!pi.setActiveTools) return;
+    const active = mode === "read"
+      ? registered.filter((n) => !mutatingNames.has(n))
+      : registered;
+    pi.setActiveTools(active);
+  }
 
   pi.on("session_start", async (_event, ctx) => {
     await ensureConnected();
@@ -217,7 +238,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       return;
     }
     if (toolList.length === 0) {
-      ctx.ui.notify("yougile-mcp: connected but no tools found (read-only mode?)", "warning");
+      ctx.ui.notify("yougile-mcp: connected but no tools found", "warning");
       return;
     }
 
@@ -227,6 +248,8 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       deny: cfg?.permissions?.deny ?? [],
     };
     const bulkDryRunFirst = cfg?.bulk_dry_run_first !== false; // default true
+    mode = await currentMode();
+    if (mode === "unknown") mode = cfg?.read_only ? "read" : (cfg?.mode ?? "confirm");
 
     for (const tool of toolList) {
       const name = tool.name;
@@ -253,12 +276,28 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
         async execute(_toolCallId, params, _signal, onUpdate, execCtx) {
           const args = (params ?? {}) as Record<string, unknown>;
 
-          if (level === "confirm") {
-            // Dry-run-first for bulk tools: show the plan, then ask
+          // set_mode: переключить режим на сервере, обновить локальный режим и видимость
+          if (name === "set_mode") {
+            const target = String(args.mode ?? "");
+            const res = await callServer(args);
+            const ok = firstText(res).includes('"ok": true');
+            if (ok) {
+              mode = target;
+              applyModeVisibility();
+            }
+            return { content: resultToContent(res), details: { mcpTool: name, mode: target } };
+          }
+
+          // read-режим: мутации скрыты, но если вызов прошёл — блокировка на сервере
+          if (mode === "read" && mutatingNames.has(name)) {
+            return { content: [{ type: "text", text: "yougile-mcp в read-режиме: мутации запрещены. Используйте set_mode(confirm|yolo)." }], details: { blocked: true } };
+          }
+
+          // confirm-режим: диалоги
+          if (mode === "confirm" && level === "confirm" && name !== "set_mode") {
+            // Dry-run-first for bulk tools
             if (bulkDryRunFirst && DRY_RUN_FIRST.has(name) && !args.dryRun) {
-              if (name === "audit_board" && !args.autoMove) {
-                // audit without autoMove is read-only — skip the dry-run dance
-              } else {
+              if (!(name === "audit_board" && !args.autoMove)) {
                 onUpdate?.({ content: [{ type: "text", text: "Считаю план изменений (dry-run)…" }], details: {} });
                 const dry = await callServer({ ...args, dryRun: true });
                 const plan = firstText(dry).slice(0, 2000);
@@ -273,7 +312,6 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
                 return { content: resultToContent(res), details: { mcpTool: name, confirmed: true } };
               }
             }
-            // Regular confirm: tool + short args summary
             const brief = Object.entries(args)
               .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`)
               .join(", ")
@@ -293,14 +331,40 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       });
 
       registered.push(name);
-      if (level === "confirm") confirmed.push(name);
     }
 
-    const mode = cfg?.read_only ? "read-only" : "normal";
+    applyModeVisibility();
+    const visible = mode === "read"
+      ? registered.filter((n) => !mutatingNames.has(n)).length
+      : registered.length;
     ctx.ui.notify(
-      `yougile-mcp: ${registered.length} tools (${mode}), confirm: ${confirmed.length}, denied: ${denied.length}`,
+      `yougile-mcp: mode=${mode}, tools: ${visible} видимых из ${registered.length}, denied: ${denied.length}`,
       "info"
     );
+  });
+
+  pi.registerCommand("yougile-mode", {
+    description: "Переключить режим yougile-mcp: /yougile-mode read|confirm|yolo",
+    handler: async (args, ctx) => {
+      const target = (args ?? "").trim().toLowerCase();
+      if (!["read", "confirm", "yolo"].includes(target)) {
+        ctx.ui.notify(`Текущий режим: ${mode}. Используй: /yougile-mode read|confirm|yolo`, "info");
+        return;
+      }
+      if (!client) {
+        ctx.ui.notify("yougile-mcp не подключён", "error");
+        return;
+      }
+      const res = await client.callTool({ name: "set_mode", arguments: { mode: target } });
+      const ok = firstText(res).includes('"ok": true');
+      if (ok) {
+        mode = target;
+        applyModeVisibility();
+        ctx.ui.notify(`yougile-mcp: режим → ${mode}`, "info");
+      } else {
+        ctx.ui.notify(`Ошибка переключения: ${firstText(res)}`, "error");
+      }
+    },
   });
 
   pi.registerCommand("yougile-status", {
@@ -314,7 +378,8 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
         ctx.ui.notify(lines.join("\n"), "error");
         return;
       }
-      lines.push(`  mode:     ${cfg?.read_only ? "read-only (mutations blocked server-side)" : "normal"}`);
+      const liveMode = await currentMode();
+      lines.push(`  mode:     ${liveMode} (в config: ${cfg?.mode ?? (cfg?.read_only ? "read" : "не задан")})`);
       lines.push(`  api key:  loaded from config file (${cfg?.api_key ? "present" : "MISSING"})`);
       lines.push(`  audit:    ${cfg?.audit?.enabled === false ? "disabled" : `enabled → ${cfg?.audit?.path ?? "~/.local/state/yougile-mcp/audit.jsonl"}`}`);
       lines.push(`  allow:    ${(cfg?.permissions?.allow ?? DEFAULT_ALLOW).join(", ")}`);

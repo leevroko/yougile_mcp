@@ -102,11 +102,14 @@ func run(cfgFlag string) error {
 	srv := mcp.New(mcp.Deps{
 		Board: boards, Tasks: tasks, Review: review,
 		AuditSvc: auditSvc, Goal: goal, Compression: comp,
-		ReadOnly: cfg.ReadOnly,
-		AuditLog: auditLog,
+		ReadOnly:   cfg.ReadOnly,
+		Mode:       cfg.Mode,
+		Config:     &cfg,
+		ConfigPath: cfgPath,
+		AuditLog:   auditLog,
 	})
 
-	mode := "normal"
+	mode := string(cfg.Mode)
 	if cfg.ReadOnly {
 		mode = "read-only"
 	}

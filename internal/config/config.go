@@ -10,6 +10,29 @@ import (
 	"path/filepath"
 )
 
+// Mode — режим доступа к инструментам.
+type Mode string
+
+// Режимы доступа.
+const (
+	// ModeRead — только чтение; мутационные инструменты недоступны.
+	ModeRead Mode = "read"
+	// ModeConfirm — запись требует подтверждения пользователя (в расширении pi).
+	ModeConfirm Mode = "confirm"
+	// ModeYolo — все запросы разрешены без подтверждения.
+	ModeYolo Mode = "yolo"
+)
+
+// ValidMode проверяет корректность режима.
+func ValidMode(m string) bool {
+	switch Mode(m) {
+	case ModeRead, ModeConfirm, ModeYolo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Permissions — политика инструментов для pi-расширения (glob-паттерны).
 type Permissions struct {
 	Allow   []string `json:"allow"`
@@ -28,7 +51,8 @@ type Config struct {
 	APIKey          string      `json:"api_key"`
 	BaseURL         string      `json:"base_url"`
 	MemoryDir       string      `json:"memory_dir"`
-	ReadOnly        bool        `json:"read_only"`
+	Mode            Mode        `json:"mode"`      // read | confirm | yolo (default confirm)
+	ReadOnly        bool        `json:"read_only"` // legacy: true = ModeRead
 	AllowInsecure   bool        `json:"allow_insecure"`
 	BulkDryRunFirst *bool       `json:"bulk_dry_run_first,omitempty"`
 	Permissions     Permissions `json:"permissions"`
@@ -101,6 +125,12 @@ func checkPermissions(path string, allowInsecure bool) error {
 
 // applyDefaults заполняет незаданные значения.
 func (c *Config) applyDefaults(path string) {
+	// Режим: legacy read_only=true → read; иначе confirm (по умолчанию безопасный).
+	if c.ReadOnly {
+		c.Mode = ModeRead
+	} else if c.Mode == "" {
+		c.Mode = ModeConfirm
+	}
 	if c.BaseURL == "" {
 		c.BaseURL = "https://ru.yougile.com/api-v2"
 	}
@@ -131,6 +161,22 @@ func defaultPermissions() Permissions {
 	}
 }
 
+// SaveMode сохраняет новый режим в конфиг-файл (права сохраняются 600).
+func (c *Config) SaveMode(m Mode, path string) error {
+	c.Mode = m
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: marshal: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("config: write: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("config: chmod: %w", err)
+	}
+	return nil
+}
+
 // Init создаёт конфиг с ключом из env (одноразовая миграция) с правами 600/700.
 // Возвращает созданный путь.
 func Init(apiKey string) (string, error) {
@@ -148,6 +194,7 @@ func Init(apiKey string) (string, error) {
 
 	cfg := Config{
 		APIKey:      apiKey,
+		Mode:        ModeConfirm,
 		Permissions: defaultPermissions(),
 		Audit:       Audit{Enabled: true},
 	}

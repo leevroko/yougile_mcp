@@ -67,6 +67,46 @@ func TestAllowInsecureOverride(t *testing.T) {
 	}
 }
 
+func TestSaveMode(t *testing.T) {
+	path := writeConfig(t, 0o700, 0o600, Config{APIKey: "k"})
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != ModeConfirm {
+		t.Fatalf("default mode = %q, want confirm", cfg.Mode)
+	}
+	if err := cfg.SaveMode(ModeRead, path); err != nil {
+		t.Fatal(err)
+	}
+	// Перечитать — режим сохранился и права остались 600
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("perms %o after save, want 600", fi.Mode().Perm())
+	}
+	cfg2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Mode != ModeRead {
+		t.Fatalf("mode after save = %q, want read", cfg2.Mode)
+	}
+}
+
+func TestLegacyReadOnlyMapsToRead(t *testing.T) {
+	path := writeConfig(t, 0o700, 0o600, Config{APIKey: "k", ReadOnly: true})
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != ModeRead {
+		t.Fatalf("read_only=true must map to mode=read, got %q", cfg.Mode)
+	}
+}
+
 func TestInitWritesSecureConfig(t *testing.T) {
 	// Init пишет в дефолтный путь (~/.config/...) — для теста перезапишем
 	// реализацию через переменную, но проще проверить через временный HOME.
