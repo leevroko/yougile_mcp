@@ -43,11 +43,11 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 
 ---
 
-## 3. Что умеет агент (21 инструмент)
+## 3. Что умеет агент (23 инструмента)
 
 **Чтение (без вопросов, allow):**
 - `list_projects`, `list_boards`, `list_columns`, `list_tasks` — списки
-- `get_task`, `get_stickers`, `get_board_snapshot` — детали
+- `get_task`, `get_stickers`, `get_board_snapshot`, `get_task_messages` — детали (включая чат задачи)
 - `summarize_board` — сводка (TL;DR + метрики + рекомендации)
 - `track_goals` — прогресс целей (weighted KR)
 - `compress_reviews` — сжатие отчётов (пишет локальные файлы)
@@ -58,6 +58,7 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 - `create_column` — создать колонку на доске (с цветом)
 - `delete_board` — удалить доску (мягкое)
 - `create_sticker` — создать стикер с состояниями (опц. привязка к доске)
+- `send_task_message` — написать в чат задачи (всегда с префиксом `[sender]`; sender или YOUGILE_AGENT_ID)
 - `update_task` — обновить/переместить/дедлайн/стикеры
 - `bulk_move_tasks` — массовое перемещение
 - `batch_update_stickers` — массовые стикеры

@@ -54,6 +54,7 @@ type Config struct {
 	Mode            Mode        `json:"mode"`      // read | confirm | yolo (default confirm)
 	ReadOnly        bool        `json:"read_only"` // legacy: true = ModeRead
 	AllowInsecure   bool        `json:"allow_insecure"`
+	AgentID         string      `json:"agent_id"` // идентификатор агента для префиксов сообщений в чатах задач
 	BulkDryRunFirst *bool       `json:"bulk_dry_run_first,omitempty"`
 	Permissions     Permissions `json:"permissions"`
 	Audit           Audit       `json:"audit"`
@@ -94,6 +95,11 @@ func Load(path string) (Config, error) {
 
 	if err := checkPermissions(path, cfg.AllowInsecure); err != nil {
 		return cfg, err
+	}
+
+	// Идентификатор агента: env (харнесс выставляет процессу) приоритетнее файла.
+	if env := os.Getenv("YOUGILE_AGENT_ID"); env != "" {
+		cfg.AgentID = env
 	}
 
 	cfg.applyDefaults(path)

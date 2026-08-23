@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/yougile-mcp/internal/domain/chat"
 	domaincolumn "github.com/yougile-mcp/internal/domain/column"
 	"github.com/yougile-mcp/internal/domain/domainerr"
 	domainsticker "github.com/yougile-mcp/internal/domain/sticker"
@@ -28,6 +29,10 @@ type Service interface {
 	ListTasks(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID) (ListResult, error)
 	// ListTasksFiltered — ListTasks с фильтрацией по completed/archived (по умолчанию только активные)
 	ListTasksFiltered(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID, f TaskFilter) (ListResult, error)
+
+	// Чат задачи (taskId == chatId)
+	GetTaskMessages(ctx context.Context, taskID valueobject.TaskID, limit, offset int) ([]chat.Message, valueobject.PagingMetadata, error)
+	SendTaskMessage(ctx context.Context, taskID valueobject.TaskID, text string) (int64, error)
 
 	// Bulk Move
 	BulkMove(ctx context.Context, req BulkMoveParams) (BulkMoveResult, error)
@@ -135,14 +140,15 @@ type BatchStickersResult struct {
 }
 
 // NewService создаёт TaskService.
-func NewService(tasks domaintask.Repository, columns domaincolumn.Repository, stickers domainsticker.Repository) Service {
-	return &service{tasks: tasks, columns: columns, stickers: stickers}
+func NewService(tasks domaintask.Repository, columns domaincolumn.Repository, stickers domainsticker.Repository, chats chat.Repository) Service {
+	return &service{tasks: tasks, columns: columns, stickers: stickers, chats: chats}
 }
 
 type service struct {
 	tasks    domaintask.Repository
 	columns  domaincolumn.Repository
 	stickers domainsticker.Repository
+	chats    chat.Repository
 }
 
 func (s *service) CreateTask(ctx context.Context, req CreateTaskParams) (valueobject.TaskID, error) {
@@ -171,6 +177,25 @@ func (s *service) MoveTask(ctx context.Context, taskID valueobject.TaskID, colum
 
 func (s *service) DeleteTask(ctx context.Context, taskID valueobject.TaskID) error {
 	return s.tasks.Delete(ctx, taskID)
+}
+
+// GetTaskMessages возвращает страницу сообщений чата задачи.
+func (s *service) GetTaskMessages(ctx context.Context, taskID valueobject.TaskID, limit, offset int) ([]chat.Message, valueobject.PagingMetadata, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return s.chats.List(ctx, taskID, limit, offset)
+}
+
+// SendTaskMessage отправляет текст в чат задачи, возвращает ID сообщения.
+func (s *service) SendTaskMessage(ctx context.Context, taskID valueobject.TaskID, text string) (int64, error) {
+	if text == "" {
+		return 0, errors.New("пустое сообщение")
+	}
+	return s.chats.Send(ctx, taskID, text)
 }
 
 // ListTasks возвращает задачи с вложенными колонками и легендой стикеров.

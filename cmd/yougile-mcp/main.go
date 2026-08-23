@@ -86,10 +86,11 @@ func run(cfgFlag string) error {
 	columnRepo := repository.NewColumnRepository(hc, cfg.BaseURL)
 	taskRepo := repository.NewTaskRepository(hc, cfg.BaseURL)
 	stickerRepo := repository.NewStickerRepository(hc, cfg.BaseURL)
+	chatRepo := repository.NewChatRepository(hc, cfg.BaseURL)
 
 	// Сервисы (прямые вызовы, без Event Bus)
 	boards := boardservice.NewService(projectRepo, boardRepo, columnRepo, stickerRepo, taskRepo)
-	tasks := taskservice.NewService(taskRepo, columnRepo, stickerRepo)
+	tasks := taskservice.NewService(taskRepo, columnRepo, stickerRepo, chatRepo)
 	review := reviewservice.NewService(boards)
 	auditSvc := auditservice.NewService(boards, tasks)
 	goal := goalservice.NewService(boards)

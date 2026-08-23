@@ -52,6 +52,7 @@ type Server struct {
 	comp     compressionservice.Service
 	readOnly bool // legacy flag: если true — мутации скрыты
 	mode     config.Mode
+	agentID  string // идентификатор агента (YOUGILE_AGENT_ID/agent_id) для префиксов в чатах
 	cfgPath  string
 	cfg      *config.Config
 	auditLog audit.Logger
@@ -113,6 +114,7 @@ func New(deps Deps) *Server {
 		comp:     deps.Compression,
 		readOnly: deps.ReadOnly,
 		mode:     cfg.Mode,
+		agentID:  cfg.AgentID,
 		cfgPath:  deps.ConfigPath,
 		cfg:      cfg,
 		auditLog: log,
@@ -221,6 +223,20 @@ func (s *Server) registerTools() {
 			mcp.WithString("boardId", mcp.Description("ID доски: привязать стикер к доске сразу после создания")),
 			mcp.WithArray("states", mcp.Description("Состояния: [{name, color}] (color hex, необязателен)")))...,
 	), "create_sticker", s.handleCreateSticker)
+
+	register(mcp.NewTool("get_task_messages",
+		ro(mcp.WithDescription("Сообщения чата задачи (taskId = chatId). Пагинация limit/offset"),
+			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
+			mcp.WithNumber("limit", mcp.Description("Максимум сообщений (по умолчанию 50, максимум 100)")),
+			mcp.WithNumber("offset", mcp.Description("Смещение пагинации")))...,
+	), s.handleGetTaskMessages)
+
+	mutating(mcp.NewTool("send_task_message",
+		mut(mcp.WithDescription("Отправить сообщение в чат задачи. К тексту ВСЕГДА добавляется префикс идентификации: \"[sender] текст\""),
+			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
+			mcp.WithString("text", mcp.Required(), mcp.Description("Текст сообщения (без префикса — он добавится автоматически)")),
+			mcp.WithString("sender", mcp.Description("Кто пишет (имя агента, напр. \"pi/yougile\"). Если не задан — YOUGILE_AGENT_ID сервера; иначе ошибка")))...,
+	), "send_task_message", s.handleSendTaskMessage)
 
 	mutating(mcp.NewTool("delete_board",
 		mut(mcp.WithDescription("Удаление доски (мягкое, deleted=true). Колонки и задачи остаются в API, но доска исчезает из списков"),
@@ -530,6 +546,51 @@ func (s *Server) handleCreateColumn(ctx context.Context, req mcp.CallToolRequest
 		return errResult(err), nil
 	}
 	return textResult(fmt.Sprintf(`{"id": %q}`, cid.String())), nil
+}
+
+func (s *Server) handleGetTaskMessages(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	tid, err := parseTaskID(str(args, "taskId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	limit := numInt(args, "limit")
+	offset := numInt(args, "offset")
+	msgs, paging, err := s.tasks.GetTaskMessages(ctx, tid, limit, offset)
+	if err != nil {
+		return errResult(err), nil
+	}
+	data, err := toJSON(map[string]any{"paging": paging, "content": msgs})
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(data), nil
+}
+
+func (s *Server) handleSendTaskMessage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	tid, err := parseTaskID(str(args, "taskId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	text := str(args, "text")
+	if text == "" {
+		return errResult(errors.New("text обязателен")), nil
+	}
+	// Идентификация отправителя обязательна: несколько агентов работают
+	// от одного API-ключа, различать их можно только префиксом.
+	sender := str(args, "sender")
+	if sender == "" {
+		sender = s.agentID
+	}
+	if sender == "" {
+		return errResult(errors.New("sender не задан: передайте sender или выставьте YOUGILE_AGENT_ID серверу (идентификация агентов обязательна)")), nil
+	}
+	id, err := s.tasks.SendTaskMessage(ctx, tid, "["+sender+"] "+text)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(fmt.Sprintf(`{"ok": true, "id": %d}`, id)), nil
 }
 
 func (s *Server) handleCreateSticker(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

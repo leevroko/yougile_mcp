@@ -76,11 +76,11 @@ function resolveBinary(): string {
 }
 
 const DEFAULT_ALLOW = [
-  "list_*", "get_*", "get_board_snapshot", "summarize_board",
+  "list_*", "get_*", "get_task_messages", "get_board_snapshot", "summarize_board",
   "track_goals", "compress_reviews", "get_mode",
 ];
 const DEFAULT_CONFIRM = [
-  "create_task", "update_task", "create_board", "create_column", "delete_board", "create_sticker", "audit_board",
+  "create_task", "update_task", "create_board", "create_column", "delete_board", "create_sticker", "send_task_message", "audit_board",
   "bulk_move_tasks", "batch_update_stickers", "set_mode",
 ];
 
@@ -235,7 +235,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   let mode: string = "unknown";
 
   const mutatingNames = new Set(
-    ["create_task", "update_task", "create_board", "create_column", "delete_board", "create_sticker", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
+    ["create_task", "update_task", "create_board", "create_column", "delete_board", "create_sticker", "send_task_message", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
   );
 
   // Issue #1: setActiveTools() is a FULL replacement of the session toolset.
