@@ -1062,7 +1062,7 @@ overdue_days = (now_ms - dl) / (86400 * 1000)
 
 1. **`/companies{*companyId}`** — формат URL неясен: нужен слеш или нет? (spec: `/companies09a0fdb3...`). В легаси не используется.
 2. **`custom` в StickersDto доски** — что возвращает поле `stickers.custom` в ответе `GET /boards/{id}`? Легаси не показывает.
-3. **Старый `/stickers` vs новый `/string-stickers`** — оба существуют, но как они соотносятся? Созданный через `/string-stickers` стикер появляется в `GET /stickers` и наоборот? Нужен эксперимент.
+3. ~~**Старый `/stickers` vs новый `/string-stickers`**~~ — **частично закрыто (2026-08-23)**: легенда с опциями (`states` с короткими hex-ID типа `659a6c507fc7`, НЕ UUID) доступна только через `GET /string-stickers?boardId=`; старый `GET /stickers` возвращает id/тип без опций. В задаче значение select-стикера = ID состояния (короткий hex). Репозиторий берёт легенду из `/string-stickers`, значения в `PUT /tasks/{id}` — `{"stickers": {"<stickerId>": "<stateId>"}}` — проверено живым вызовом.
 4. **`/upload-file`** — исключён из плана как ненужный.
 5. **Формат ответа при ошибке** — что приходит в body при 400/401/404/429? OpenAPI не специфицирует.
 6. ~~**`GET /tasks?boardId=` без `columnId`**~~ — **закрыто (2026-08-23)**: API возвращает `400 "property boardId should not exist"`; `/tasks` принимает только `columnId`. Полный обход доски = обязательно по колонкам (см. §10.1).

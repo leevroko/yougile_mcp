@@ -184,7 +184,8 @@ func (s *Server) registerTools() {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Название")),
 			mcp.WithString("columnId", mcp.Description("ID колонки")),
 			mcp.WithString("description", mcp.Description("Описание")),
-			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")))...,
+			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
+			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers")))...,
 	), "create_task", s.handleCreateTask)
 
 	mutating(mcp.NewTool("update_task",
@@ -195,7 +196,8 @@ func (s *Server) registerTools() {
 			mcp.WithString("title", mcp.Description("Новое название")),
 			mcp.WithString("description", mcp.Description("Новое описание")),
 			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
-			mcp.WithBoolean("completed", mcp.Description("Выполнена")))...,
+			mcp.WithBoolean("completed", mcp.Description("Выполнена")),
+			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers. Полная замена текущих стикеров задачи")))...,
 	), "update_task", s.handleUpdateTask)
 
 	register(mcp.NewTool("get_stickers",
@@ -410,6 +412,11 @@ func (s *Server) handleCreateTask(ctx context.Context, req mcp.CallToolRequest) 
 		}
 		params.Deadline = &dl
 	}
+	if st, err := parseStickers(args, "stickers"); err != nil {
+		return errResult(err), nil
+	} else if st != nil {
+		params.Stickers = st
+	}
 	params.Description = str(args, "description")
 
 	tid, err := s.tasks.CreateTask(ctx, params)
@@ -448,6 +455,11 @@ func (s *Server) handleUpdateTask(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	if v, ok := args["completed"].(bool); ok {
 		ur.Completed = &v
+	}
+	if st, err := parseStickers(args, "stickers"); err != nil {
+		return errResult(err), nil
+	} else if st != nil {
+		ur.Stickers = &st
 	}
 	if err := s.tasks.UpdateTask(ctx, tid, ur); err != nil {
 		return errResult(err), nil

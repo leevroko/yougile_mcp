@@ -4,6 +4,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/yougile-mcp/internal/domain/valueobject"
 )
@@ -97,6 +98,48 @@ func parseStickerID(s string) (valueobject.StickerID, error) {
 		return valueobject.StickerID{}, fmt.Errorf("invalid stickerId %q: %w", s, err)
 	}
 	return valueobject.StickerID(raw), nil
+}
+
+// parseStickers парсит аргумент stickers: {stickerId: значение}.
+// Для select-стикеров значение — ID опции, для прочих — строка/число.
+// nil, если аргумент не передан.
+func parseStickers(m map[string]any, key string) (map[valueobject.StickerID]valueobject.StickerValue, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	switch val := v.(type) {
+	case map[string]any:
+		if len(val) == 0 {
+			return nil, nil
+		}
+		out := make(map[valueobject.StickerID]valueobject.StickerValue, len(val))
+		for k, raw := range val {
+			sid, err := parseStickerID(k)
+			if err != nil {
+				return nil, err
+			}
+			switch rv := raw.(type) {
+			case string:
+				out[sid] = valueobject.StickerValue{Value: rv}
+			case float64:
+				// number-стикеры приходят из JSON как float64
+				out[sid] = valueobject.StickerValue{Value: strconv.FormatFloat(rv, 'f', -1, 64)}
+			default:
+				out[sid] = valueobject.StickerValue{Value: fmt.Sprintf("%v", raw)}
+			}
+		}
+		return out, nil
+	case string:
+		// строка-JSON для клиентов, не умеющих вложенные объекты
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(val), &parsed); err != nil {
+			return nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}: %w", err)
+		}
+		return parseStickers(map[string]any{key: parsed}, key)
+	default:
+		return nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}")
+	}
 }
 
 // toJSON — сериализация в JSON (с отступами).

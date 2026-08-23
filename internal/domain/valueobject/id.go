@@ -166,16 +166,18 @@ func NewSprintStickerID(s string) (SprintStickerID, error) {
 }
 
 // StateID — ID состояния стикера (опция select, состояние string/sprint).
+// НЕ UUID: API возвращает короткие hex-ID (например "659a6c507fc7").
 type StateID ID
 
 func (id StateID) String() string { return ID(id).String() }
 func (id StateID) IsZero() bool   { return ID(id).IsZero() }
+
+// NewStateID принимает любой непустой ID состояния.
 func NewStateID(s string) (StateID, error) {
-	id, err := NewID(s)
-	if err != nil {
-		return StateID{}, err
+	if s == "" {
+		return StateID{}, fmt.Errorf("%w: empty state id", ErrInvalidID)
 	}
-	return StateID(id), nil
+	return StateID{value: s}, nil
 }
 
 // ── JSON-маршаллинг для типизированных ID ──
