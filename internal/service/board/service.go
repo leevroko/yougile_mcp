@@ -3,6 +3,8 @@ package board
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/yougile-mcp/internal/domain/board"
 	"github.com/yougile-mcp/internal/domain/column"
@@ -78,8 +80,19 @@ func (s *service) GetBoardSnapshot(ctx context.Context, boardID valueobject.Boar
 	return s.GetBoardSnapshotFiltered(ctx, boardID, since, SnapshotFilter{})
 }
 
+// snapshotFetchConcurrency — сколько колонок фетчим параллельно (issue #2).
+const snapshotFetchConcurrency = 4
+
+// snapshotTimeout — общий дедлайн снапшота (issue #2). Меньше 60s-таймаута
+// MCP-клиента, чтобы клиент получил внятную ошибку вместо разрыва соединения.
+// var (не const) — чтобы тесты могли переопределить.
+var snapshotTimeout = 45 * time.Second
+
 // GetBoardSnapshotFiltered — snapshot с фильтрацией задач.
 func (s *service) GetBoardSnapshotFiltered(ctx context.Context, boardID valueobject.BoardID, since *int64, f SnapshotFilter) (board.Aggregate, error) {
+	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
+	defer cancel()
+
 	b, err := s.boards.GetByID(ctx, boardID)
 	if err != nil {
 		return board.Aggregate{}, err
@@ -90,37 +103,62 @@ func (s *service) GetBoardSnapshotFiltered(ctx context.Context, boardID valueobj
 		return board.Aggregate{}, err
 	}
 
-	// Полный обход задач: по каждой колонке (API требует columnId — неопределённость №6 подтверждена).
-	all := make([]task.Task, 0)
-	for _, c := range cols {
-		colID := c.ID
-		offset := 0
-		for {
-			filter := task.Filter{BoardID: &boardID, ColumnID: &colID, Limit: 100, Offset: offset}
-			tasks, paging, err := s.tasks.List(ctx, filter)
-			if err != nil {
-				return board.Aggregate{}, err
+	// Полный обход задач: по каждой колонке (API требует columnId — неопределённость №6
+	// подтверждена: GET /tasks не принимает boardId, возвращает 400).
+	// Колонки фетчим параллельно (bounded, issue #2); страницы внутри колонки
+	// последовательны. Результаты пишем в perCol[i] — порядок колонок сохраняется.
+	perCol := make([][]task.Task, len(cols))
+	errs := make([]error, len(cols))
+	sem := make(chan struct{}, snapshotFetchConcurrency)
+	var wg sync.WaitGroup
+	for i, c := range cols {
+		wg.Add(1)
+		go func(i int, colID valueobject.ColumnID) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			out := make([]task.Task, 0)
+			offset := 0
+			for {
+				filter := task.Filter{BoardID: &boardID, ColumnID: &colID, Limit: 100, Offset: offset}
+				tasks, paging, err := s.tasks.List(ctx, filter)
+				if err != nil {
+					errs[i] = err
+					return
+				}
+				for _, t := range tasks {
+					if since != nil && t.Timestamp < *since {
+						continue // дельта: пропустить не изменившиеся
+					}
+					if t.Deleted {
+						continue
+					}
+					if t.Archived && !f.IncludeArchived {
+						continue
+					}
+					if t.Completed && !f.IncludeCompleted {
+						continue
+					}
+					out = append(out, t)
+				}
+				if !paging.HasNext() || len(tasks) == 0 {
+					break
+				}
+				offset = paging.Offset + paging.Limit
 			}
-			for _, t := range tasks {
-				if since != nil && t.Timestamp < *since {
-					continue // дельта: пропустить не изменившиеся
-				}
-				if t.Deleted {
-					continue
-				}
-				if t.Archived && !f.IncludeArchived {
-					continue
-				}
-				if t.Completed && !f.IncludeCompleted {
-					continue
-				}
-				all = append(all, t)
-			}
-			if !paging.HasNext() || len(tasks) == 0 {
-				break
-			}
-			offset = paging.Offset + paging.Limit
+			perCol[i] = out
+		}(i, c.ID)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return board.Aggregate{}, err
 		}
+	}
+	all := make([]task.Task, 0)
+	for _, tasks := range perCol {
+		all = append(all, tasks...)
 	}
 
 	st, err := s.stickers.List(ctx, boardID)

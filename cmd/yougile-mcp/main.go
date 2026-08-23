@@ -68,9 +68,12 @@ func run(cfgFlag string) error {
 	}
 
 	// HTTP-клиент: BearerAuth → RateLimiter → Retry
+	// Burst=10: страницам снапшота не выстраиваться в очередь по 1.2с
+	// (issue #2); суммарный лимит остаётся ~50 rpm.
 	hc, err := http.NewClient(http.Config{
 		BaseURL:    cfg.BaseURL,
 		APIKey:     cfg.APIKey,
+		Burst:      10,
 		MaxRetries: 3,
 	})
 	if err != nil {

@@ -552,6 +552,10 @@ Content-Type: application/json
 GET /task-list?boardId=uuid&columnId=uuid&limit=100&offset=0
 ```
 
+> ⚠️ Проверено на реальном API (2026-08-23): `/tasks` **не принимает `boardId`** — только `columnId`.
+> Запрос с `boardId` в query → `400 {"message":["property boardId should not exist"]}` (NestJS forbidNonWhitelisted).
+> Аналогично `/task-list`: только `columnId`.
+
 ### 10.2 Получить список (обратный порядок)
 
 ```
@@ -1061,4 +1065,4 @@ overdue_days = (now_ms - dl) / (86400 * 1000)
 3. **Старый `/stickers` vs новый `/string-stickers`** — оба существуют, но как они соотносятся? Созданный через `/string-stickers` стикер появляется в `GET /stickers` и наоборот? Нужен эксперимент.
 4. **`/upload-file`** — исключён из плана как ненужный.
 5. **Формат ответа при ошибке** — что приходит в body при 400/401/404/429? OpenAPI не специфицирует.
-6. **`GET /tasks?boardId=` без `columnId`** — возвращает ли все задачи доски одним запросом? Если да — срезает 8 запросов по колонкам до 1 (см. PLAN.md шаг 2 «Стоимость сценариев»).
+6. ~~**`GET /tasks?boardId=` без `columnId`**~~ — **закрыто (2026-08-23)**: API возвращает `400 "property boardId should not exist"`; `/tasks` принимает только `columnId`. Полный обход доски = обязательно по колонкам (см. §10.1).
