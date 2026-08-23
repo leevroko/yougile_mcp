@@ -20,7 +20,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+
+// ── Project-scope guard (issue #1) ─────────────────────────────────────
+// Extension is installed user-scope, but must only activate inside the
+// yougile_mcp project. Silent no-op everywhere else.
+// Override via env YOUGILE_PI_EXT: "global" (activate everywhere) | "off" (never).
+
+const PROJECT_ROOT = join(homedir(), "wss", "personal", "yougile_mcp");
+
+function inProjectSession(cwd: string): boolean {
+  const override = process.env.YOUGILE_PI_EXT;
+  if (override === "global") return true;
+  if (override === "off") return false;
+  return cwd === PROJECT_ROOT || cwd.startsWith(PROJECT_ROOT + sep);
+}
 
 // ── Config (file-based, no secrets in env) ──────────────────────────────
 
@@ -217,21 +231,46 @@ const DRY_RUN_FIRST = new Set(["bulk_move_tasks", "batch_update_stickers", "audi
 export default function yougileMcpExtension(pi: ExtensionAPI) {
   const registered: string[] = [];
   const denied: string[] = [];
-  let mode: string = "unknown"; // read | confirm | yolo (from server)
+  // Режим: "off" (локальный, сессия) | "read" | "confirm" | "yolo" (с сервера)
+  let mode: string = "unknown";
 
   const mutatingNames = new Set(
     ["create_task", "update_task", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
   );
 
+  // Issue #1: setActiveTools() is a FULL replacement of the session toolset.
+  // Passing only our names wiped builtin tools (bash/read/edit) and other
+  // extensions' tools. Compute the "others" set (everything currently active
+  // that this extension does not own) and always keep it intact.
   function applyModeVisibility() {
-    if (!pi.setActiveTools) return;
-    const active = mode === "read"
+    if (!pi.setActiveTools || !pi.getActiveTools) return;
+    const own = new Set(registered);
+    const others = pi.getActiveTools().filter((n) => !own.has(n));
+    if (mode === "off") {
+      pi.setActiveTools(others); // off: hide YouGile tools only, keep the rest
+      return;
+    }
+    const yougileVisible = mode === "read"
       ? registered.filter((n) => !mutatingNames.has(n))
       : registered;
-    pi.setActiveTools(active);
+    pi.setActiveTools([...others, ...yougileVisible]);
   }
 
+  // session_start fires on startup AND on resume; if extensions are NOT
+  // reloaded in-process, this handler can run twice — never register the
+  // same tools twice.
+  let toolsRegistered = false;
+
   pi.on("session_start", async (_event, ctx) => {
+    // cwd-guard: activate only inside the yougile_mcp project (issue #1)
+    if (!inProjectSession(ctx.cwd)) return; // silent no-op in other projects
+
+    if (toolsRegistered) {
+      // Resume in the same process: just re-apply visibility, keep toolset intact.
+      applyModeVisibility();
+      return;
+    }
+
     await ensureConnected();
     if (connectError) {
       ctx.ui.notify(`yougile-mcp: ${connectError}`, "error");
@@ -275,6 +314,11 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
         parameters: buildParamsSchema(tool),
         async execute(_toolCallId, params, _signal, onUpdate, execCtx) {
           const args = (params ?? {}) as Record<string, unknown>;
+
+          // off: доступ к YouGile полностью отключён
+          if (mode === "off") {
+            return { content: [{ type: "text", text: "yougile-mcp выключен (off). Включите: /yougile-mode read|confirm|yolo" }], details: { off: true } };
+          }
 
           // set_mode: переключить режим на сервере, обновить локальный режим и видимость
           if (name === "set_mode") {
@@ -333,10 +377,13 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       registered.push(name);
     }
 
+    toolsRegistered = true;
     applyModeVisibility();
-    const visible = mode === "read"
-      ? registered.filter((n) => !mutatingNames.has(n)).length
-      : registered.length;
+    const visible = mode === "off"
+      ? 0
+      : mode === "read"
+        ? registered.filter((n) => !mutatingNames.has(n)).length
+        : registered.length;
     ctx.ui.notify(
       `yougile-mcp: mode=${mode}, tools: ${visible} видимых из ${registered.length}, denied: ${denied.length}`,
       "info"
@@ -344,15 +391,22 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("yougile-mode", {
-    description: "Переключить режим yougile-mcp: /yougile-mode read|confirm|yolo",
+    description: "Переключить режим yougile-mcp: /yougile-mode off|read|confirm|yolo",
     handler: async (args, ctx) => {
       const target = (args ?? "").trim().toLowerCase();
-      if (!["read", "confirm", "yolo"].includes(target)) {
-        ctx.ui.notify(`Текущий режим: ${mode}. Используй: /yougile-mode read|confirm|yolo`, "info");
+      if (!["off", "read", "confirm", "yolo"].includes(target)) {
+        ctx.ui.notify(`Текущий режим: ${mode}. Используй: /yougile-mode off|read|confirm|yolo`, "info");
+        return;
+      }
+      // off — локальный режим сессии (сервер/конфиг не трогаем)
+      if (target === "off") {
+        mode = "off";
+        applyModeVisibility();
+        ctx.ui.notify("yougile-mcp: режим → off (доступ к YouGile отключён; вернуть: /yougile-mode read|confirm|yolo)", "info");
         return;
       }
       if (!client) {
-        ctx.ui.notify("yougile-mcp не подключён", "error");
+        ctx.ui.notify("yougile-mcp не активен (нет подключения или сессия вне проекта " + PROJECT_ROOT + ")", "error");
         return;
       }
       const res = await client.callTool({ name: "set_mode", arguments: { mode: target } });
@@ -370,6 +424,10 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   pi.registerCommand("yougile-status", {
     description: "Security status of yougile-mcp (mode, policy, paths)",
     handler: async (_args, ctx) => {
+      if (!inProjectSession(ctx.cwd)) {
+        ctx.ui.notify(`yougile-mcp: вне проекта ${PROJECT_ROOT} расширение неактивно`, "info");
+        return;
+      }
       await ensureConnected();
       const lines: string[] = ["yougile-mcp security status:"];
       lines.push(`  config:   ${configPath()}`);
@@ -378,7 +436,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
         ctx.ui.notify(lines.join("\n"), "error");
         return;
       }
-      const liveMode = await currentMode();
+      const liveMode = mode === "off" ? "off (локально)" : await currentMode();
       lines.push(`  mode:     ${liveMode} (в config: ${cfg?.mode ?? (cfg?.read_only ? "read" : "не задан")})`);
       lines.push(`  api key:  loaded from config file (${cfg?.api_key ? "present" : "MISSING"})`);
       lines.push(`  audit:    ${cfg?.audit?.enabled === false ? "disabled" : `enabled → ${cfg?.audit?.path ?? "~/.local/state/yougile-mcp/audit.jsonl"}`}`);
