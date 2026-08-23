@@ -13,3 +13,4 @@
 *.test
 *.out
 node_modules/
+dist/
