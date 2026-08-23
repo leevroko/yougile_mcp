@@ -30,6 +30,9 @@ type Service interface {
 	CreateProject(ctx context.Context, title string) (valueobject.ProjectID, error)
 	CreateBoard(ctx context.Context, title string, projectID valueobject.ProjectID) (valueobject.BoardID, error)
 	CreateColumn(ctx context.Context, title string, boardID valueobject.BoardID, color valueobject.ColumnColor) (valueobject.ColumnID, error)
+
+	// DeleteBoard — мягкое удаление доски (deleted=true), как в API.
+	DeleteBoard(ctx context.Context, boardID valueobject.BoardID) error
 }
 
 // NewService создаёт BoardService.
@@ -200,4 +203,11 @@ func (s *service) CreateBoard(ctx context.Context, title string, projectID value
 
 func (s *service) CreateColumn(ctx context.Context, title string, boardID valueobject.BoardID, color valueobject.ColumnColor) (valueobject.ColumnID, error) {
 	return s.columns.Create(ctx, column.CreateRequest{Title: title, BoardID: boardID, Color: color})
+}
+
+// DeleteBoard — мягкое удаление (deleted=true). Задачи/колонки остаются в API,
+// но доска исчезает из списков и снапшотов.
+func (s *service) DeleteBoard(ctx context.Context, boardID valueobject.BoardID) error {
+	deleted := true
+	return s.boards.Update(ctx, boardID, board.UpdateRequest{Deleted: &deleted})
 }

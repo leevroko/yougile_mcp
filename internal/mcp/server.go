@@ -213,6 +213,11 @@ func (s *Server) registerTools() {
 			mcp.WithNumber("color", mcp.Description("Цвет: 1=default, 2=gray, 3=blue, 4=green, 5=orange, 6=red, 7=purple")))...,
 	), "create_column", s.handleCreateColumn)
 
+	mutating(mcp.NewTool("delete_board",
+		mut(mcp.WithDescription("Удаление доски (мягкое, deleted=true). Колонки и задачи остаются в API, но доска исчезает из списков"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")))...,
+	), "delete_board", s.handleDeleteBoard)
+
 	register(mcp.NewTool("get_stickers",
 		ro(mcp.WithDescription("Легенда стикеров доски"),
 			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")))...,
@@ -516,6 +521,18 @@ func (s *Server) handleCreateColumn(ctx context.Context, req mcp.CallToolRequest
 		return errResult(err), nil
 	}
 	return textResult(fmt.Sprintf(`{"id": %q}`, cid.String())), nil
+}
+
+func (s *Server) handleDeleteBoard(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	bid, err := parseBoardID(str(args, "boardId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	if err := s.board.DeleteBoard(ctx, bid); err != nil {
+		return errResult(err), nil
+	}
+	return textResult(`{"ok": true}`), nil
 }
 
 func (s *Server) handleGetStickers(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
