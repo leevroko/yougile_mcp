@@ -13,12 +13,12 @@ func TestListTools(t *testing.T) {
 	}
 	tools := s.mcp.ListTools()
 	t.Logf("registered tools: %d", len(tools))
-	if len(tools) != 17 {
-		t.Fatalf("expected 17 tools, got %d", len(tools))
+	if len(tools) != 19 {
+		t.Fatalf("expected 19 tools, got %d", len(tools))
 	}
 	for _, name := range []string{
 		"list_projects", "list_boards", "list_columns", "list_tasks",
-		"get_task", "create_task", "update_task", "get_stickers",
+		"get_task", "create_task", "update_task", "create_board", "create_column", "get_stickers",
 		"get_board_snapshot", "summarize_board", "audit_board",
 		"track_goals", "bulk_move_tasks", "batch_update_stickers", "compress_reviews",
 		"get_mode", "set_mode",

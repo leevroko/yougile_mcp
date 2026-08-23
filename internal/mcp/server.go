@@ -200,6 +200,19 @@ func (s *Server) registerTools() {
 			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers. Полная замена текущих стикеров задачи")))...,
 	), "update_task", s.handleUpdateTask)
 
+	mutating(mcp.NewTool("create_board",
+		mut(mcp.WithDescription("Создание доски в проекте"),
+			mcp.WithString("projectId", mcp.Required(), mcp.Description("ID проекта (из list_projects)")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Название доски")))...,
+	), "create_board", s.handleCreateBoard)
+
+	mutating(mcp.NewTool("create_column",
+		mut(mcp.WithDescription("Создание колонки на доске"),
+			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Название колонки")),
+			mcp.WithNumber("color", mcp.Description("Цвет: 1=default, 2=gray, 3=blue, 4=green, 5=orange, 6=red, 7=purple")))...,
+	), "create_column", s.handleCreateColumn)
+
 	register(mcp.NewTool("get_stickers",
 		ro(mcp.WithDescription("Легенда стикеров доски"),
 			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")))...,
@@ -465,6 +478,44 @@ func (s *Server) handleUpdateTask(ctx context.Context, req mcp.CallToolRequest) 
 		return errResult(err), nil
 	}
 	return textResult(`{"ok": true}`), nil
+}
+
+func (s *Server) handleCreateBoard(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	pid, err := parseProjectID(str(args, "projectId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	title := str(args, "title")
+	if title == "" {
+		return errResult(errors.New("title обязателен")), nil
+	}
+	bid, err := s.board.CreateBoard(ctx, title, pid)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(fmt.Sprintf(`{"id": %q}`, bid.String())), nil
+}
+
+func (s *Server) handleCreateColumn(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	bid, err := parseBoardID(str(args, "boardId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	title := str(args, "title")
+	if title == "" {
+		return errResult(errors.New("title обязателен")), nil
+	}
+	color := valueobject.ColumnColorDefault
+	if c := numInt(args, "color"); c > 0 {
+		color = valueobject.ColumnColor(c)
+	}
+	cid, err := s.board.CreateColumn(ctx, title, bid, color)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(fmt.Sprintf(`{"id": %q}`, cid.String())), nil
 }
 
 func (s *Server) handleGetStickers(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

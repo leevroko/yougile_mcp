@@ -80,7 +80,7 @@ const DEFAULT_ALLOW = [
   "track_goals", "compress_reviews", "get_mode",
 ];
 const DEFAULT_CONFIRM = [
-  "create_task", "update_task", "audit_board",
+  "create_task", "update_task", "create_board", "create_column", "audit_board",
   "bulk_move_tasks", "batch_update_stickers", "set_mode",
 ];
 
@@ -235,7 +235,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   let mode: string = "unknown";
 
   const mutatingNames = new Set(
-    ["create_task", "update_task", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
+    ["create_task", "update_task", "create_board", "create_column", "audit_board", "bulk_move_tasks", "batch_update_stickers", "set_mode"]
   );
 
   // Issue #1: setActiveTools() is a FULL replacement of the session toolset.
