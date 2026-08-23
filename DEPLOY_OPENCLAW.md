@@ -48,12 +48,13 @@ chmod 600 /root/.config/yougile-mcp/config.json
   "api_key": "...",                    // как передано, не менять
   "base_url": "https://ru.yougile.com/api-v2",
   "mode": "read",                      // ← ОБЯЗАТЕЛЬНО "read" на сервере (см. примечание о безопасности)
+  "agent_id": "openclaw-server",        // идентичность для чатов задач (альтернатива env YOUGILE_AGENT_ID)
   "permissions": { ... },              // оставить как есть
   "audit": { "enabled": true }         // аудит мутаций включён
 }
 ```
 
-**Почему `mode: "read"`**: интерактивные подтверждения мутаций (`confirm`) — фича pi-расширения на рабочей станции; на сервере их никто не покажет, и сервер выполнит мутацию без вопросов. В `read` сервер жёстко блокирует все мутирующие инструменты (`create_task`, `update_task`, `bulk_move_tasks`, `batch_update_stickers`, `audit_board` с autoMove) — читать можно всё. Разблокировка позже: `set_mode` (MCP-инструмент) или правка конфига + рестарт.
+**Почему `mode: "read"`**: интерактивные подтверждения мутаций (`confirm`) — фича pi-расширения на рабочей станции; на сервере их никто не покажет, и сервер выполнит мутацию без вопросов. В `read` сервер жёстко блокирует все мутирующие инструменты (`create_task`, `update_task`, `create_board`, `create_column`, `delete_board`, `create_sticker`, `send_task_message`, `bulk_move_tasks`, `batch_update_stickers`, `audit_board` с autoMove) — читать можно всё. Разблокировка позже: `set_mode` (MCP-инструмент) или правка конфига + рестарт.
 
 ## Шаг 3 — smoke-тест бинаря без OpenClaw
 
@@ -73,12 +74,17 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 ```bash
 openclaw mcp add yougile --command /root/bin/yougile-mcp
+
+# Идентичность агента для чатов задач (send_task_message добавляет "[<id>] "
+# к каждому сообщению; без идентичности вызов ОТКЛОНЯЕТСЯ):
+openclaw mcp configure yougile --env YOUGILE_AGENT_ID=openclaw-server
+
 openclaw mcp doctor yougile --probe
 openclaw mcp reload    # если gateway уже запущен
 ```
 
-Ожидание в `doctor --probe`: сервер отвечает, **17 инструментов**, 0 ошибок:
-`list_projects, list_boards, list_columns, list_tasks, get_task, get_stickers, get_board_snapshot, summarize_board, audit_board, track_goals, bulk_move_tasks, batch_update_stickers, create_task, update_task, compress_reviews, get_mode, set_mode`
+Ожидание в `doctor --probe`: сервер отвечает, **23 инструмента**, 0 ошибок:
+`list_projects, list_boards, list_columns, list_tasks, get_task, get_stickers, get_board_snapshot, summarize_board, audit_board, track_goals, bulk_move_tasks, batch_update_stickers, create_task, update_task, create_board, create_column, delete_board, create_sticker, get_task_messages, send_task_message, compress_reviews, get_mode, set_mode`
 
 (мутирующие в read-режиме будут видны, но вызов вернёт «сервер в read-режиме: мутации запрещены» и запишется в аудит как `read-blocked`)
 
@@ -107,6 +113,12 @@ mv /root/.openclaw/skills/yougile* /root/legacy-skills-backup/ 2>/dev/null
 openclaw mcp configure yougile --timeout 60
 ```
 
+Дополнительно (после включения режима записи):
+
+> «напиши в чат задачи X сообщение: проверка связи»
+
+Ожидание: сообщение в YouGile UI начинается с префикса `[openclaw-server]` (или `sender`, переданного агентом).
+
 ---
 
 ## Траблшутинг
@@ -119,6 +131,7 @@ openclaw mcp configure yougile --timeout 60
 | 401 от YouGile | Ключ неверный/ротирован — обновить `api_key` в конфиге |
 | Инструмент висит >60с | Должно уйти после `--timeout 60`; снапшот большой доски реально занимает ~7–10с (rate limit 50 rpm) |
 | Неправильная просрочка | Сервер считает дедлайны по своему `time.Now()` — проверить TZ: `timedatectl`, при необходимости выставить корректный часовой пояс |
+| `sender не задан` при send_task_message | Не задана идентичность: `openclaw mcp configure yougile --env YOUGILE_AGENT_ID=<id>` + reload, либо агент передаёт `sender` в вызове |
 
 ## Что где лежит (для справки)
 
