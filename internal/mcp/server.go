@@ -15,6 +15,7 @@ import (
 	"github.com/yougile-mcp/internal/audit"
 	"github.com/yougile-mcp/internal/config"
 	"github.com/yougile-mcp/internal/domain/board"
+	"github.com/yougile-mcp/internal/domain/sticker"
 	"github.com/yougile-mcp/internal/domain/task"
 	"github.com/yougile-mcp/internal/domain/valueobject"
 	auditservice "github.com/yougile-mcp/internal/service/audit"
@@ -212,6 +213,14 @@ func (s *Server) registerTools() {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Название колонки")),
 			mcp.WithNumber("color", mcp.Description("Цвет: 1=default, 2=gray, 3=blue, 4=green, 5=orange, 6=red, 7=purple")))...,
 	), "create_column", s.handleCreateColumn)
+
+	mutating(mcp.NewTool("create_sticker",
+		mut(mcp.WithDescription("Создание стикера с набором состояний (select). Опционально сразу привязать к доске"),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Название стикера")),
+			mcp.WithString("icon", mcp.Description("Иконка (необязательно, например prio, star)")),
+			mcp.WithString("boardId", mcp.Description("ID доски: привязать стикер к доске сразу после создания")),
+			mcp.WithArray("states", mcp.Description("Состояния: [{name, color}] (color hex, необязателен)")))...,
+	), "create_sticker", s.handleCreateSticker)
 
 	mutating(mcp.NewTool("delete_board",
 		mut(mcp.WithDescription("Удаление доски (мягкое, deleted=true). Колонки и задачи остаются в API, но доска исчезает из списков"),
@@ -521,6 +530,45 @@ func (s *Server) handleCreateColumn(ctx context.Context, req mcp.CallToolRequest
 		return errResult(err), nil
 	}
 	return textResult(fmt.Sprintf(`{"id": %q}`, cid.String())), nil
+}
+
+func (s *Server) handleCreateSticker(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	name := str(args, "name")
+	if name == "" {
+		return errResult(errors.New("name обязателен")), nil
+	}
+	cr := sticker.CreateRequest{Title: name, Icon: str(args, "icon")}
+	if v := str(args, "boardId"); v != "" {
+		bid, err := parseBoardID(v)
+		if err != nil {
+			return errResult(err), nil
+		}
+		cr.BoardID = bid
+	}
+	// states: [{name, color}]
+	if raw, ok := args["states"].([]any); ok {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				return errResult(errors.New("states: ожидается массив {name, color}")), nil
+			}
+			n := str(m, "name")
+			if n == "" {
+				return errResult(errors.New("states[].name обязателен")), nil
+			}
+			opt := sticker.StickerOption{Title: n}
+			if c := str(m, "color"); c != "" {
+				opt.Color = &c
+			}
+			cr.Options = append(cr.Options, opt)
+		}
+	}
+	sid, attached, err := s.board.CreateSticker(ctx, cr)
+	if err != nil {
+		return errResult(err), nil
+	}
+	return textResult(fmt.Sprintf(`{"id": %q, "attached": %t}`, sid.String(), attached)), nil
 }
 
 func (s *Server) handleDeleteBoard(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

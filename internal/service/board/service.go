@@ -33,6 +33,10 @@ type Service interface {
 
 	// DeleteBoard — мягкое удаление доски (deleted=true), как в API.
 	DeleteBoard(ctx context.Context, boardID valueobject.BoardID) error
+
+	// CreateSticker — создать string-стикер (states = набор состояний);
+	// при заданном boardID — привязать его к доске.
+	CreateSticker(ctx context.Context, req sticker.CreateRequest) (valueobject.StickerID, bool, error)
 }
 
 // NewService создаёт BoardService.
@@ -210,4 +214,20 @@ func (s *service) CreateColumn(ctx context.Context, title string, boardID valueo
 func (s *service) DeleteBoard(ctx context.Context, boardID valueobject.BoardID) error {
 	deleted := true
 	return s.boards.Update(ctx, boardID, board.UpdateRequest{Deleted: &deleted})
+}
+
+// CreateSticker создаёт string-стикер; второй результат — привязан ли к доске.
+func (s *service) CreateSticker(ctx context.Context, req sticker.CreateRequest) (valueobject.StickerID, bool, error) {
+	sid, err := s.stickers.Create(ctx, req)
+	if err != nil {
+		return valueobject.StickerID{}, false, err
+	}
+	attached := false
+	if !req.BoardID.IsZero() {
+		if err := s.stickers.AttachToBoard(ctx, sid, req.BoardID); err != nil {
+			return sid, false, err
+		}
+		attached = true
+	}
+	return sid, attached, nil
 }

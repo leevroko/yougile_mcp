@@ -43,7 +43,7 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 
 ---
 
-## 3. Что умеет агент (20 инструментов)
+## 3. Что умеет агент (21 инструмент)
 
 **Чтение (без вопросов, allow):**
 - `list_projects`, `list_boards`, `list_columns`, `list_tasks` — списки
@@ -57,6 +57,7 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 - `create_board` — создать доску в проекте
 - `create_column` — создать колонку на доске (с цветом)
 - `delete_board` — удалить доску (мягкое)
+- `create_sticker` — создать стикер с состояниями (опц. привязка к доске)
 - `update_task` — обновить/переместить/дедлайн/стикеры
 - `bulk_move_tasks` — массовое перемещение
 - `batch_update_stickers` — массовые стикеры
@@ -112,7 +113,7 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 ```json
 "permissions": {
   "allow":   ["list_*", "get_*", "get_board_snapshot", "summarize_board", "track_goals", "compress_reviews"],
-  "confirm": ["create_task", "update_task", "create_board", "create_column", "audit_board", "bulk_move_tasks", "batch_update_stickers"],
+  "confirm": ["create_task", "update_task", "create_board", "create_column", "create_sticker", "audit_board", "bulk_move_tasks", "batch_update_stickers"],
   "deny":    []
 }
 ```

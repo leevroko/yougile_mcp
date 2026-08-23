@@ -51,10 +51,24 @@ type stringStickerListDTO struct {
 	Content []stringStickerDTO `json:"content"`
 }
 
-// boardStickersDTO — stickers.custom из /boards/{id}.
+// createStringStickerDTO — тело POST /string-stickers.
+type createStringStickerDTO struct {
+	Name   string                      `json:"name"`
+	Icon   string                      `json:"icon,omitempty"`
+	States []stringStickerStateNoIDDTO `json:"states"`
+}
+
+// stringStickerStateNoIDDTO — состояние без ID (при создании).
+type stringStickerStateNoIDDTO struct {
+	Name  string  `json:"name"`
+	Color *string `json:"color,omitempty"`
+}
+
+// boardStickersDTO — поле stickers из /boards/{id}.
 type boardStickersDTO struct {
 	Stickers struct {
-		Custom map[string]bool `json:"custom"`
+		Deadline bool            `json:"deadline"`
+		Custom   map[string]bool `json:"custom"`
 	} `json:"stickers"`
 }
 
@@ -128,9 +142,54 @@ func (r *stickerRepository) GetByID(ctx context.Context, id valueobject.StickerI
 	return sticker.Sticker{}, ErrNotFound
 }
 
-// Create — не поддерживается для /string-stickers (создание через отдельный API).
+// Create — POST /string-stickers {name, icon, states}. BoardID игнорируется
+// (привязка — отдельным вызовом AttachToBoard).
 func (r *stickerRepository) Create(ctx context.Context, req sticker.CreateRequest) (valueobject.StickerID, error) {
-	return valueobject.StickerID{}, ErrNotSupported
+	if req.Title == "" {
+		return valueobject.StickerID{}, errors.New("sticker name is required")
+	}
+	states := make([]stringStickerStateNoIDDTO, 0, len(req.Options))
+	for _, o := range req.Options {
+		if o.Title == "" {
+			continue
+		}
+		states = append(states, stringStickerStateNoIDDTO{Name: o.Title, Color: o.Color})
+	}
+	body := createStringStickerDTO{Name: req.Title, Icon: req.Icon, States: states}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := r.client.post(ctx, "/string-stickers", body, &out); err != nil {
+		return valueobject.StickerID{}, err
+	}
+	id, err := valueobject.NewStickerID(out.ID)
+	if err != nil {
+		return valueobject.StickerID{}, err
+	}
+	return id, nil
+}
+
+// AttachToBoard привязывает стикер к доске: GET текущего stickers → merge
+// custom → PUT /boards/{id}. Перезапись чужих custom-записей исключена.
+func (r *stickerRepository) AttachToBoard(ctx context.Context, id valueobject.StickerID, boardID valueobject.BoardID) error {
+	var cur boardStickersDTO
+	if err := r.client.get(ctx, "/boards/"+boardID.String(), &cur); err != nil {
+		return err
+	}
+	custom := cur.Stickers.Custom
+	if custom == nil {
+		custom = map[string]bool{}
+	}
+	if custom[id.String()] {
+		return nil // уже привязан
+	}
+	custom[id.String()] = true
+	body := boardStickersDTO{}
+	body.Stickers.Custom = custom
+	if cur.Stickers.Deadline {
+		body.Stickers.Deadline = true
+	}
+	return r.client.put(ctx, "/boards/"+boardID.String(), body, nil)
 }
 
 // Update — не поддерживается для /string-stickers.

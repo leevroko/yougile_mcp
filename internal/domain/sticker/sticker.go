@@ -33,11 +33,17 @@ type Repository interface {
 	Create(ctx context.Context, req CreateRequest) (valueobject.StickerID, error)
 	// Update обновляет стикер (частично).
 	Update(ctx context.Context, id valueobject.StickerID, req UpdateRequest) error
+	// AttachToBoard привязывает стикер к доске (merge в stickers.custom).
+	AttachToBoard(ctx context.Context, id valueobject.StickerID, boardID valueobject.BoardID) error
 }
 
-// CreateRequest — создание стикера.
+// CreateRequest — создание стикера (/string-stickers).
+// Title → name, Options → states; BoardID (если задан) — привязать к доске
+// после создания (merge в stickers.custom). Type игнорируется: все
+// string-стикеры select-подобны.
 type CreateRequest struct {
 	Title   string
+	Icon    string
 	Type    valueobject.StickerType
 	BoardID valueobject.BoardID
 	Options []StickerOption
