@@ -1,0 +1,54 @@
+name: release
+
+# Публикация релиза по ручному тегу: тесты → бинари (amd64/arm64) → sha256 →
+# GitHub Release с notes из CHANGELOG.md (см. RELEASE_POLICY.md §6).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # создание релиза и загрузка артефактов
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Check changelog section exists
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$TAG\]" CHANGELOG.md; then
+            echo "::error::В CHANGELOG.md нет секции [$TAG] — релиз без changelog запрещён (RELEASE_POLICY.md §5)."
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          awk -v tag="$TAG" '/^## \[/{if (in_sec) exit; in_sec = ($0 ~ "\\[" tag "\\]")} in_sec {print}' CHANGELOG.md > notes.md
+          head -3 notes.md
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/yougile-mcp-linux-amd64 ./cmd/yougile-mcp
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/yougile-mcp-linux-arm64 ./cmd/yougile-mcp
+          cd dist && sha256sum * > SHA256SUMS && ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: |
+            dist/yougile-mcp-linux-amd64
+            dist/yougile-mcp-linux-arm64
+            dist/SHA256SUMS
