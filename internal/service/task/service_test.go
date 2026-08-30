@@ -46,6 +46,9 @@ func (f *fakeRepo) Update(ctx context.Context, id valueobject.TaskID, req domain
 	if req.Subtasks != nil {
 		t.Subtasks = *req.Subtasks
 	}
+	if req.Deleted != nil {
+		t.Deleted = *req.Deleted
+	}
 	f.tasks[id.String()] = t
 	f.updated[id.String()] = req
 	return nil
@@ -216,5 +219,27 @@ func TestStickerPatchSerializesNullAsRemove(t *testing.T) {
 	saved := repo.updated[uuidA].ClearStickers
 	if len(saved) != 1 || saved[0] != clear[0] {
 		t.Fatalf("ClearStickers not propagated: %v", saved)
+	}
+}
+
+func TestUndeleteViaUpdate(t *testing.T) {
+	repo := newFakeRepo()
+	id := seed(t, repo, uuidA)
+	svc := newTestService(repo)
+
+	if err := svc.DeleteTask(context.Background(), id); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	if !repo.tasks[uuidA].Deleted {
+		t.Fatal("expected deleted=true")
+	}
+
+	// восстановление через update_task {deleted: false} (issue #6)
+	no := false
+	if err := svc.UpdateTask(context.Background(), id, domaintask.UpdateRequest{Deleted: &no}); err != nil {
+		t.Fatalf("undelete: %v", err)
+	}
+	if repo.tasks[uuidA].Deleted {
+		t.Fatal("expected deleted=false after restore")
 	}
 }

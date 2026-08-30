@@ -7,6 +7,9 @@
 
 ## [Unreleased]
 
+### Added
+- Восстановление удалённых задач (issue #6): `update_task` с `deleted: false` (раньше `delete_task` был однонаправленным, восстановление — только вручную в UI). `deleted: true` эквивалентен `delete_task`.
+
 ## [0.6.0] — 2026-08-31
 
 ### Added

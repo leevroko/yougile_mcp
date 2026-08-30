@@ -60,7 +60,8 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 - `create_sticker` — создать стикер с состояниями (опц. привязка к доске)
 - `send_task_message` — написать в чат задачи (всегда с префиксом `[sender]`; sender или YOUGILE_AGENT_ID)
 - `update_task` — обновить/переместить/дедлайн/стикеры/подзадачи (`add_subtask`, `remove_subtask`, `subtasks` — полная замена; `stickers: {id: null}` — снять стикер)
-- `delete_task` — мягко удалить задачу (deleted=true; восстановление — в UI)
+- `delete_task` — мягко удалить задачу (deleted=true)
+- восстановление — `update_task {deleted: false}`
 - `bulk_move_tasks` — массовое перемещение
 - `batch_update_stickers` — массовые стикеры
 - `audit_board` — аудит (просрочка/стикеры/авто-перемещение в Review)

@@ -249,7 +249,7 @@ func (s *Server) registerTools() {
 	), s.handleGetTask)
 
 	mutating(mcp.NewTool("delete_task",
-		mut(mcp.WithDescription("Мягкое удаление задачи (deleted=true). Задача исчезает из списков; восстановление — вручную в UI"),
+		mut(mcp.WithDescription("Мягкое удаление задачи (deleted=true). Восстановление — update_task {deleted: false}"),
 			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")))...,
 	), "delete_task", s.handleDeleteTask)
 
@@ -272,6 +272,7 @@ func (s *Server) registerTools() {
 			mcp.WithString("description", mcp.Description("Новое описание")),
 			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
 			mcp.WithBoolean("completed", mcp.Description("Выполнена")),
+			mcp.WithBoolean("deleted", mcp.Description("Мягкое удаление (true) / восстановление удалённой задачи (false) — тот же PUT /tasks")),
 			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение|null}. Значение null — снять стикер (merge: остальные не трогаются). Для select — ID опции из get_stickers")),
 			mcp.WithArray("subtasks", mcp.Items(map[string]any{"type": "string"}), mcp.Description("ПОЛНАЯ ЗАМЕНА списка дочерних задач (массив ID). Нельзя смешивать с add_subtask/remove_subtask")),
 			mcp.WithString("add_subtask", mcp.Description("Привязать задачу как подзадачу (ID). Проверяется существование; повтор — no-op")),
@@ -621,6 +622,10 @@ func (s *Server) handleUpdateTask(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	if v, ok := args["completed"].(bool); ok {
 		ur.Completed = &v
+	}
+	// deleted: true — soft-delete (эквивалент delete_task), false — восстановление (issue #6)
+	if v, ok := args["deleted"].(bool); ok {
+		ur.Deleted = &v
 	}
 	if st, clear, err := parseStickers(args, "stickers"); err != nil {
 		return errResult(err), nil
