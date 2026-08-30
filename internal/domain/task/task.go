@@ -145,6 +145,8 @@ type UpdateRequest struct {
 	Deleted     *bool
 	Assigned    *[]valueobject.UserID
 	Stickers    *map[valueobject.StickerID]valueobject.StickerValue
+	// ClearStickers — стикеры к снятию (в API — {stickerId: null}, merge-семантика).
+	ClearStickers []valueobject.StickerID
 	Subtasks    *[]valueobject.TaskID
 	Color       *valueobject.TaskColor
 }

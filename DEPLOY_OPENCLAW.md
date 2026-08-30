@@ -83,7 +83,7 @@ openclaw mcp doctor yougile --probe
 openclaw mcp reload    # если gateway уже запущен
 ```
 
-Ожидание в `doctor --probe`: сервер отвечает, **23 инструмента**, 0 ошибок:
+Ожидание в `doctor --probe`: сервер отвечает, **24 инструмента**, 0 ошибок:
 `list_projects, list_boards, list_columns, list_tasks, get_task, get_stickers, get_board_snapshot, summarize_board, audit_board, track_goals, bulk_move_tasks, batch_update_stickers, create_task, update_task, create_board, create_column, delete_board, create_sticker, get_task_messages, send_task_message, compress_reviews, get_mode, set_mode`
 
 (мутирующие в read-режиме будут видны, но вызов вернёт «сервер в read-режиме: мутации запрещены» и запишется в аудит как `read-blocked`)

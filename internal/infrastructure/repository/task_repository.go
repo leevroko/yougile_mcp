@@ -124,8 +124,12 @@ func (r *taskRepository) Update(ctx context.Context, id valueobject.TaskID, req 
 	if req.Assigned != nil {
 		body.Assigned = idStrings(*req.Assigned)
 	}
-	if req.Stickers != nil {
-		body.Stickers = stickerValues(*req.Stickers)
+	if req.Stickers != nil || req.ClearStickers != nil {
+		var set map[valueobject.StickerID]valueobject.StickerValue
+		if req.Stickers != nil {
+			set = *req.Stickers
+		}
+		body.Stickers = stickerPatch(set, req.ClearStickers)
 	}
 	if req.Subtasks != nil {
 		body.Subtasks = idStrings(*req.Subtasks)

@@ -25,6 +25,11 @@ type Service interface {
 	MoveTask(ctx context.Context, taskID valueobject.TaskID, columnID valueobject.ColumnID) error
 	DeleteTask(ctx context.Context, taskID valueobject.TaskID) error
 
+	// Подзадачи (issue #5)
+	AddSubtask(ctx context.Context, parentID, childID valueobject.TaskID) error
+	RemoveSubtask(ctx context.Context, parentID, childID valueobject.TaskID) error
+	ListSubtasks(ctx context.Context, parentID valueobject.TaskID) (SubtasksResult, error)
+
 	// ListTasks — с вложенными справочными данными (колонки + легенда стикеров)
 	ListTasks(ctx context.Context, boardID valueobject.BoardID, columnID *valueobject.ColumnID) (ListResult, error)
 	// ListTasksFiltered — ListTasks с фильтрацией по completed/archived (по умолчанию только активные)
@@ -49,6 +54,7 @@ type CreateTaskParams struct {
 	Deadline    *valueobject.Deadline
 	Assigned    []valueobject.UserID
 	Stickers    map[valueobject.StickerID]valueobject.StickerValue
+	Subtasks    []valueobject.TaskID // ID дочерних задач (родитель создаётся сразу с детьми)
 }
 
 // ListResult — задачи + справочные данные (для вложения в ответ).
@@ -159,8 +165,78 @@ func (s *service) CreateTask(ctx context.Context, req CreateTaskParams) (valueob
 		Deadline:    req.Deadline,
 		Assigned:    req.Assigned,
 		Stickers:    req.Stickers,
+		Subtasks:    req.Subtasks,
 	}
 	return s.tasks.Create(ctx, cr)
+}
+
+// AddSubtask привязывает задачу к родителю (read-modify-write поверх PUT subtasks,
+// который в API — полная замена списка; см. API_REFERENCE.md §6).
+// Идемпотентен: повторная привязка — no-op. Ребёнок проверяется на существование
+// (404 → ошибка) — защита от битых ссылок.
+func (s *service) AddSubtask(ctx context.Context, parentID, childID valueobject.TaskID) error {
+	if _, err := s.tasks.GetByID(ctx, childID); err != nil {
+		return fmt.Errorf("подзадача %s не найдена (битая ссылка?): %w", childID.String(), err)
+	}
+	parent, err := s.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	for _, id := range parent.Subtasks {
+		if id == childID {
+			return nil // уже привязана — идемпотентность
+		}
+	}
+	updated := append(parent.Subtasks, childID)
+	return s.tasks.Update(ctx, parentID, domaintask.UpdateRequest{Subtasks: &updated})
+}
+
+// RemoveSubtask отвязывает задачу от родителя: рвётся связь, задача остаётся живой.
+// Идемпотентен: отвязка отсутствующей подзадачи — no-op.
+func (s *service) RemoveSubtask(ctx context.Context, parentID, childID valueobject.TaskID) error {
+	parent, err := s.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	updated := make([]valueobject.TaskID, 0, len(parent.Subtasks))
+	found := false
+	for _, id := range parent.Subtasks {
+		if id == childID {
+			found = true
+			continue
+		}
+		updated = append(updated, id)
+	}
+	if !found {
+		return nil
+	}
+	return s.tasks.Update(ctx, parentID, domaintask.UpdateRequest{Subtasks: &updated})
+}
+
+// SubtasksResult — прямые дети родителя; Broken — ID из subtasks, чьи задачи
+// не читаются (удалены) — API не чистит список родителя при удалении ребёнка.
+type SubtasksResult struct {
+	Parent domaintask.Task
+	Tasks  []domaintask.Task
+	Broken []string
+}
+
+// ListSubtasks возвращает прямых детей родителя с их данными.
+func (s *service) ListSubtasks(ctx context.Context, parentID valueobject.TaskID) (SubtasksResult, error) {
+	parent, err := s.tasks.GetByID(ctx, parentID)
+	if err != nil {
+		return SubtasksResult{}, err
+	}
+	res := SubtasksResult{Parent: parent, Tasks: []domaintask.Task{}, Broken: []string{}}
+	for _, id := range parent.Subtasks {
+		t, err := s.tasks.GetByID(ctx, id)
+		if err != nil {
+			res.Broken = append(res.Broken, id.String())
+			continue
+		}
+		res.Tasks = append(res.Tasks, t)
+	}
+	return res, nil
 }
 
 func (s *service) GetTask(ctx context.Context, taskID valueobject.TaskID) (domaintask.Task, error) {

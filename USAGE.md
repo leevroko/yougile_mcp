@@ -43,23 +43,24 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 
 ---
 
-## 3. Что умеет агент (23 инструмента)
+## 3. Что умеет агент (24 инструмента)
 
 **Чтение (без вопросов, allow):**
-- `list_projects`, `list_boards`, `list_columns`, `list_tasks` — списки
+- `list_projects`, `list_boards`, `list_columns`, `list_tasks` — списки (`list_tasks` с `parentId` — прямые подзадачи родителя)
 - `get_task`, `get_stickers`, `get_board_snapshot`, `get_task_messages` — детали (включая чат задачи)
 - `summarize_board` — сводка (TL;DR + метрики + рекомендации)
 - `track_goals` — прогресс целей (weighted KR)
 - `compress_reviews` — сжатие отчётов (пишет локальные файлы)
 
 **Изменения (спросит подтверждение, confirm):**
-- `create_task` — создать задачу
+- `create_task` — создать задачу (опционально сразу с подзадачами: `subtasks: [taskId, ...]`)
 - `create_board` — создать доску в проекте
 - `create_column` — создать колонку на доске (с цветом)
 - `delete_board` — удалить доску (мягкое)
 - `create_sticker` — создать стикер с состояниями (опц. привязка к доске)
 - `send_task_message` — написать в чат задачи (всегда с префиксом `[sender]`; sender или YOUGILE_AGENT_ID)
-- `update_task` — обновить/переместить/дедлайн/стикеры
+- `update_task` — обновить/переместить/дедлайн/стикеры/подзадачи (`add_subtask`, `remove_subtask`, `subtasks` — полная замена; `stickers: {id: null}` — снять стикер)
+- `delete_task` — мягко удалить задачу (deleted=true; восстановление — в UI)
 - `bulk_move_tasks` — массовое перемещение
 - `batch_update_stickers` — массовые стикеры
 - `audit_board` — аудит (просрочка/стикеры/авто-перемещение в Review)

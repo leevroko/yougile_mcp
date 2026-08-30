@@ -7,6 +7,17 @@
 
 ## [Unreleased]
 
+### Added
+- Подзадачи (issue #5): `create_task` с `subtasks` — атомарное создание родителя с детьми; `update_task` — `subtasks` (полная замена), `add_subtask` / `remove_subtask` (read-modify-write, идемпотентные, с проверкой существования ребёнка); `list_tasks` с `parentId` — прямые дети родителя + `broken` (битые ссылки).
+- Инструмент `delete_task` — мягкое удаление задачи (deleted=true).
+- `update_task`: `stickers: {id: null}` — снятие стикера (merge-семантика API: остальные не трогаются).
+
+### Changed
+- `list_tasks.boardId` больше не обязателен в схеме при передаче `parentId` (без обоих — ошибка).
+
+### Fixed
+- Формулировка про «полную замену стикеров» в `update_task` была неточной: API мержит по ключам, теперь null-значение явно снимает стикер.
+
 ## [0.5.0] — 2026-08-30 (ретроспектива, тег не выставлялся)
 
 ### Added

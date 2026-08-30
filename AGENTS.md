@@ -44,7 +44,7 @@
 MCP-сервер на Go для интеграции ИИ-ассистента с YouGile REST API v2.
 Замена существующих OpenClaw-скиллов и Python-скриптов (легаси-скрипты проанализированы в `LEGACY_PROJECT_STATE.md`).
 
-Проект прошёл фазу проектирования (docs: `API_REFERENCE.md`, `PLAN.md`, `SCENARIOS.md`, `DESIGN.md`, `SERVICES.md`) и перешёл к реализации. **MVP реализован**: DDD-слои, HTTP-клиент с RoundTripper, 6 сервисов, MCP-сервер с 15 инструментами.
+Проект прошёл фазу проектирования (docs: `API_REFERENCE.md`, `PLAN.md`, `SCENARIOS.md`, `DESIGN.md`, `SERVICES.md`) и перешёл к реализации. **MVP реализован**: DDD-слои, HTTP-клиент с RoundTripper, 6 сервисов, MCP-сервер с 24 инструментами.
 
 > ⚠️ **Статус проекта**: MVP (реализован, не протестирован на реальном API). Неопределённости API — в `API_REFERENCE.md` раздел 19.
 
@@ -122,7 +122,7 @@ yougile-mcp/
 │   │   ├── audit/           # Audit (overdue, стикеры, autoMove)
 │   │   ├── goal/            # TrackGoals / WeightedKR
 │   │   └── compression/     # Compress (daily→weekly→...)
-│   └── mcp/                 # MCP-сервер: 15 инструментов, аннотации, read-only, markdown-рендер
+│   └── mcp/                 # MCP-сервер: 24 инструмента, аннотации, read-only, markdown-рендер
 ├── pi-extension/            # Reference pi-расширения (~/.pi/agent/extensions/yougile-mcp/)
 └── .git/                    # Git-репозиторий
 ```
@@ -152,7 +152,7 @@ yougile-mcp/
 | `internal/infrastructure/http/client.go` | Фабрика HTTP-клиента с настроенным RoundTripper |
 | `internal/infrastructure/repository/` | HTTP-реализации репозиториев: task, board, column, sticker, project, user (пагинация, DTO-маппинг) |
 | `internal/service/` | Доменные сервисы: board, task, review, audit, goal, compression |
-| `internal/mcp/` | MCP-сервер: 15 инструментов (8 CRUD + 7 композитных), markdown-рендер, format json\|markdown |
+| `internal/mcp/` | MCP-сервер: 24 инструмента (CRUD + композитные), markdown-рендер, format json\|markdown |
 
 ---
 
@@ -395,7 +395,7 @@ func (s *reviewService) Summarize(ctx context.Context, boardID valueobject.Board
 | 2 | Определение пользовательских сценариев (business-first) → [`SCENARIOS.md`](SCENARIOS.md) | ✅ done |
 | 3 | Дизайн DDD сущностей на основе сценариев → [`DESIGN.md`](DESIGN.md) | ✅ done |
 | 4 | Дизайн доменных сервисов → [`SERVICES.md`](SERVICES.md). Прямые вызовы вместо Event Bus | ✅ done |
-| 5 | Кодовые решения → **реализовано**: HTTP-клиент (RoundTripper), репозитории, 6 сервисов, MCP (15 инструментов) | ✅ done (MVP) |
+| 5 | Кодовые решения → **реализовано**: HTTP-клиент (RoundTripper), репозитории, 6 сервисов, MCP (24 инструмента) | ✅ done (MVP+subtasks) |
 | 6 | Дальнейшее планирование (порядок реализации, спринты, тестирование) | ⏳ pending |
 
 ## Known API Uncertainties

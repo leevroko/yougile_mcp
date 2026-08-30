@@ -234,9 +234,10 @@ func (s *Server) registerTools() {
 	), s.handleListColumns)
 
 	register(mcp.NewTool("list_tasks",
-		ro(mcp.WithDescription("Задачи доски/колонки + названия колонок + легенда стикеров"),
-			mcp.WithString("boardId", mcp.Required(), mcp.Description("ID доски")),
+		ro(mcp.WithDescription("Задачи доски/колонки + названия колонок + легенда стикеров. С parentId — прямые дети родителя (композитно: parent → его subtasks → задачи; broken — ID несуществующих)"),
+			mcp.WithString("boardId", mcp.Description("ID доски (обязателен без parentId)")),
 			mcp.WithString("columnId", mcp.Description("ID колонки (опционально)")),
+			mcp.WithString("parentId", mcp.Description("ID родителя: вернуть его прямых подзадачи (boardId игнорируется)")),
 			mcp.WithBoolean("includeCompleted", mcp.Description("Включить выполненные (по умолчанию false)")),
 			mcp.WithBoolean("includeArchived", mcp.Description("Включить архивированные (по умолчанию false)")),
 			mcp.WithString("format", mcp.Description("Формат: json|markdown (по умолчанию json)")))...,
@@ -247,17 +248,23 @@ func (s *Server) registerTools() {
 			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")))...,
 	), s.handleGetTask)
 
+	mutating(mcp.NewTool("delete_task",
+		mut(mcp.WithDescription("Мягкое удаление задачи (deleted=true). Задача исчезает из списков; восстановление — вручную в UI"),
+			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")))...,
+	), "delete_task", s.handleDeleteTask)
+
 	mutating(mcp.NewTool("create_task",
 		mut(mcp.WithDescription("Создание задачи"),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Название")),
 			mcp.WithString("columnId", mcp.Description("ID колонки")),
 			mcp.WithString("description", mcp.Description("Описание")),
 			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
-			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers")))...,
+			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers")),
+			mcp.WithArray("subtasks", mcp.Items(map[string]any{"type": "string"}), mcp.Description("ID дочерних задач — родитель создаётся сразу с детьми")))...,
 	), "create_task", s.handleCreateTask)
 
 	mutating(mcp.NewTool("update_task",
-		mut(mcp.WithDescription("Обновление задачи (перемещение, стикеры, дедлайн)"),
+		mut(mcp.WithDescription("Обновление задачи (перемещение, стикеры, дедлайн, подзадачи)"),
 			mcp.WithIdempotentHintAnnotation(true),
 			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
 			mcp.WithString("columnId", mcp.Description("Целевая колонка (перемещение)")),
@@ -265,7 +272,10 @@ func (s *Server) registerTools() {
 			mcp.WithString("description", mcp.Description("Новое описание")),
 			mcp.WithNumber("deadline", mcp.Description("Дедлайн (timestamp ms)")),
 			mcp.WithBoolean("completed", mcp.Description("Выполнена")),
-			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение}. Для select — ID опции из get_stickers. Полная замена текущих стикеров задачи")))...,
+			mcp.WithObject("stickers", mcp.Description("Стикеры: {stickerId: значение|null}. Значение null — снять стикер (merge: остальные не трогаются). Для select — ID опции из get_stickers")),
+			mcp.WithArray("subtasks", mcp.Items(map[string]any{"type": "string"}), mcp.Description("ПОЛНАЯ ЗАМЕНА списка дочерних задач (массив ID). Нельзя смешивать с add_subtask/remove_subtask")),
+			mcp.WithString("add_subtask", mcp.Description("Привязать задачу как подзадачу (ID). Проверяется существование; повтор — no-op")),
+			mcp.WithString("remove_subtask", mcp.Description("Отвязать подзадачу (ID). Задача не удаляется; повтор — no-op")))...,
 	), "update_task", s.handleUpdateTask)
 
 	mutating(mcp.NewTool("create_board",
@@ -455,7 +465,34 @@ func (s *Server) handleListColumns(ctx context.Context, req mcp.CallToolRequest)
 
 func (s *Server) handleListTasks(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	bid, err := parseBoardID(str(args, "boardId"))
+
+	// parentId: вернуть прямых детей родителя (композитно — API не умеет фильтровать
+	// по родителю, связь хранится только на родителе; см. API_REFERENCE.md §6).
+	if v := str(args, "parentId"); v != "" {
+		pid, err := parseTaskID(v)
+		if err != nil {
+			return errResult(err), nil
+		}
+		res, err := s.tasks.ListSubtasks(ctx, pid)
+		if err != nil {
+			return errResult(err), nil
+		}
+		data, err := toJSON(map[string]any{
+			"parent": res.Parent,
+			"tasks":  res.Tasks,
+			"broken": res.Broken,
+		})
+		if err != nil {
+			return errResult(err), nil
+		}
+		return textResult(data), nil
+	}
+
+	bidRaw := str(args, "boardId")
+	if bidRaw == "" {
+		return errResult(errors.New("boardId обязателен (или используйте parentId для подзадач)")), nil
+	}
+	bid, err := parseBoardID(bidRaw)
 	if err != nil {
 		return errResult(err), nil
 	}
@@ -503,6 +540,18 @@ func (s *Server) handleGetTask(ctx context.Context, req mcp.CallToolRequest) (*m
 	return textResult(data), nil
 }
 
+func (s *Server) handleDeleteTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	tid, err := parseTaskID(str(args, "taskId"))
+	if err != nil {
+		return errResult(err), nil
+	}
+	if err := s.tasks.DeleteTask(ctx, tid); err != nil {
+		return errResult(err), nil
+	}
+	return textResult(`{"ok": true, "deleted": true}`), nil
+}
+
 func (s *Server) handleCreateTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	params := taskservice.CreateTaskParams{Title: str(args, "title")}
@@ -520,10 +569,19 @@ func (s *Server) handleCreateTask(ctx context.Context, req mcp.CallToolRequest) 
 		}
 		params.Deadline = &dl
 	}
-	if st, err := parseStickers(args, "stickers"); err != nil {
+	if st, clear, err := parseStickers(args, "stickers"); err != nil {
 		return errResult(err), nil
-	} else if st != nil {
+	} else if len(st) > 0 {
 		params.Stickers = st
+	} else if len(clear) > 0 {
+		return errResult(errors.New("stickers: null при создании не имеет смысла — задача ещё без стикеров, просто не указывайте ключ")), nil
+	}
+	for _, raw := range strSlice(args, "subtasks") {
+		sid, err := parseTaskID(raw)
+		if err != nil {
+			return errResult(fmt.Errorf("subtasks: %w", err)), nil
+		}
+		params.Subtasks = append(params.Subtasks, sid)
 	}
 	params.Description = str(args, "description")
 
@@ -564,13 +622,55 @@ func (s *Server) handleUpdateTask(ctx context.Context, req mcp.CallToolRequest) 
 	if v, ok := args["completed"].(bool); ok {
 		ur.Completed = &v
 	}
-	if st, err := parseStickers(args, "stickers"); err != nil {
+	if st, clear, err := parseStickers(args, "stickers"); err != nil {
 		return errResult(err), nil
-	} else if st != nil {
+	} else if st != nil || clear != nil {
 		ur.Stickers = &st
+		ur.ClearStickers = clear
+	}
+
+	// Подзадачи (issue #5): полная замена subtasks или точечные add/remove
+	// (read-modify-write в сервисе). Одновременно — нельзя.
+	hasSubtasks := strSlice(args, "subtasks")
+	addSub := str(args, "add_subtask")
+	removeSub := str(args, "remove_subtask")
+	if len(hasSubtasks) > 0 && (addSub != "" || removeSub != "") {
+		return errResult(errors.New("subtasks нельзя смешивать с add_subtask/remove_subtask: либо полный список, либо точечное изменение")), nil
+	}
+	if addSub != "" && removeSub != "" {
+		return errResult(errors.New("add_subtask и remove_subtask в одном вызове: выполните двумя вызовами")), nil
+	}
+	if len(hasSubtasks) > 0 {
+		ids := make([]valueobject.TaskID, 0, len(hasSubtasks))
+		for _, raw := range hasSubtasks {
+			sid, err := parseTaskID(raw)
+			if err != nil {
+				return errResult(fmt.Errorf("subtasks: %w", err)), nil
+			}
+			ids = append(ids, sid)
+		}
+		ur.Subtasks = &ids
 	}
 	if err := s.tasks.UpdateTask(ctx, tid, ur); err != nil {
 		return errResult(err), nil
+	}
+	if addSub != "" {
+		cid, err := parseTaskID(addSub)
+		if err != nil {
+			return errResult(fmt.Errorf("add_subtask: %w", err)), nil
+		}
+		if err := s.tasks.AddSubtask(ctx, tid, cid); err != nil {
+			return errResult(err), nil
+		}
+	}
+	if removeSub != "" {
+		cid, err := parseTaskID(removeSub)
+		if err != nil {
+			return errResult(fmt.Errorf("remove_subtask: %w", err)), nil
+		}
+		if err := s.tasks.RemoveSubtask(ctx, tid, cid); err != nil {
+			return errResult(err), nil
+		}
 	}
 	return textResult(`{"ok": true}`), nil
 }

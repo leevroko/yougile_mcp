@@ -37,6 +37,21 @@ func str(m map[string]any, key string) string {
 	return v
 }
 
+// strSlice — извлечение []string из map (MCP-клиенты присылают массивы как []any).
+func strSlice(m map[string]any, key string) []string {
+	arr, ok := m[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // boolVal — извлечение bool из map.
 func boolVal(m map[string]any, key string) bool {
 	v, ok := m[key].(bool)
@@ -102,43 +117,48 @@ func parseStickerID(s string) (valueobject.StickerID, error) {
 
 // parseStickers парсит аргумент stickers: {stickerId: значение}.
 // Для select-стикеров значение — ID опции, для прочих — строка/число.
-// nil, если аргумент не передан.
-func parseStickers(m map[string]any, key string) (map[valueobject.StickerID]valueobject.StickerValue, error) {
+// Значение null — снять стикер: попадает в clear (merge-семантика API).
+// nil, nil если аргумент не передан.
+func parseStickers(m map[string]any, key string) (set map[valueobject.StickerID]valueobject.StickerValue, clear []valueobject.StickerID, err error) {
 	v, ok := m[key]
 	if !ok || v == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	switch val := v.(type) {
 	case map[string]any:
 		if len(val) == 0 {
-			return nil, nil
+			return nil, nil, nil
 		}
-		out := make(map[valueobject.StickerID]valueobject.StickerValue, len(val))
+		set = make(map[valueobject.StickerID]valueobject.StickerValue, len(val))
 		for k, raw := range val {
-			sid, err := parseStickerID(k)
-			if err != nil {
-				return nil, err
+			sid, perr := parseStickerID(k)
+			if perr != nil {
+				return nil, nil, perr
+			}
+			if raw == nil {
+				clear = append(clear, sid)
+				continue
 			}
 			switch rv := raw.(type) {
 			case string:
-				out[sid] = valueobject.StickerValue{Value: rv}
+				set[sid] = valueobject.StickerValue{Value: rv}
 			case float64:
 				// number-стикеры приходят из JSON как float64
-				out[sid] = valueobject.StickerValue{Value: strconv.FormatFloat(rv, 'f', -1, 64)}
+				set[sid] = valueobject.StickerValue{Value: strconv.FormatFloat(rv, 'f', -1, 64)}
 			default:
-				out[sid] = valueobject.StickerValue{Value: fmt.Sprintf("%v", raw)}
+				set[sid] = valueobject.StickerValue{Value: fmt.Sprintf("%v", raw)}
 			}
 		}
-		return out, nil
+		return set, clear, nil
 	case string:
 		// строка-JSON для клиентов, не умеющих вложенные объекты
 		var parsed map[string]any
-		if err := json.Unmarshal([]byte(val), &parsed); err != nil {
-			return nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}: %w", err)
+		if uerr := json.Unmarshal([]byte(val), &parsed); uerr != nil {
+			return nil, nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}: %w", uerr)
 		}
 		return parseStickers(map[string]any{key: parsed}, key)
 	default:
-		return nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}")
+		return nil, nil, fmt.Errorf("invalid stickers: ожидается объект {stickerId: значение}")
 	}
 }
 

@@ -108,7 +108,7 @@ const DEFAULT_ALLOW = [
   "track_goals", "compress_reviews", "get_mode",
 ];
 const DEFAULT_CONFIRM = [
-  "create_task", "update_task", "create_board", "create_column", "delete_board", "create_sticker", "send_task_message", "audit_board",
+  "create_task", "update_task", "delete_task", "create_board", "create_column", "delete_board", "create_sticker", "send_task_message", "audit_board",
   "bulk_move_tasks", "batch_update_stickers", "set_mode",
 ];
 

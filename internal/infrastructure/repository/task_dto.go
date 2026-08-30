@@ -187,6 +187,22 @@ func stickerValues(m map[valueobject.StickerID]valueobject.StickerValue) map[str
 	return out
 }
 
+// stickerPatch объединяет установку и снятие стикеров в один JSON-объект:
+// {id: значение} — установить/обновить, {id: null} — снять (merge-семантика API).
+func stickerPatch(set map[valueobject.StickerID]valueobject.StickerValue, clear []valueobject.StickerID) map[string]any {
+	if len(set) == 0 && len(clear) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(set)+len(clear))
+	for k, v := range set {
+		out[k.String()] = v.Value
+	}
+	for _, k := range clear {
+		out[k.String()] = nil
+	}
+	return out
+}
+
 // fmtStringer — минимальный интерфейс для ID-типов.
 type fmtStringer interface {
 	String() string
