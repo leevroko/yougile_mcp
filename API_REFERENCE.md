@@ -655,6 +655,7 @@ GET /tasks/{id}
 | Битые ссылки | при удалении ребёнка (soft-delete) список родителя **не чистится** — GET по такому ID вернёт 200 с `deleted: true` (soft-deleted читаем!) |
 | Снятие стикера | `PUT {"stickers": {"{stickerId}": null}}` — merge: null удаляет только указанный, остальные не трогаются |
 | Циклы (A→B→A), глубина | не проверены upstream; 3+ уровня работают |
+| Параллельные изменения списка | в YouGile API атомарного append нет — MCP-сервер сериализует свои `add_subtask`/`remove_subtask` per-parent мьютексом (issue #7); внешние клиенты (UI, другие интеграции) могут затереть список — фундаментально лечится только атомарным API |
 
 MCP-слой (issue #5): `create_task.subtasks`, `update_task.subtasks` (полная замена) / `add_subtask` / `remove_subtask` (read-modify-write в TaskService с проверкой существования ребёнка и идемпотентностью), `list_tasks.parentId` (композитная выборка детей + `broken` — ID несуществующих), `delete_task` (soft-delete).
 

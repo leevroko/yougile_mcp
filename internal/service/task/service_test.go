@@ -3,7 +3,10 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	domainerr "github.com/yougile-mcp/internal/domain/domainerr"
 	domaintask "github.com/yougile-mcp/internal/domain/task"
@@ -11,7 +14,11 @@ import (
 )
 
 // fakeRepo — минимальный in-memory task.Repository для тестов подзадач.
+// Потокобезопасен: сервис зовёт методы из параллельных горутин
+// (проверка ребёнка идёт вне родительского мьютекса — это нормально,
+// продовый репозиторий ходит по HTTP без shared-структур).
 type fakeRepo struct {
+	mu      sync.Mutex
 	tasks   map[string]domaintask.Task
 	updated map[string]domaintask.UpdateRequest // taskId → последний Update
 }
@@ -25,6 +32,8 @@ func (f *fakeRepo) List(ctx context.Context, filter domaintask.Filter) ([]domain
 }
 
 func (f *fakeRepo) GetByID(ctx context.Context, id valueobject.TaskID) (domaintask.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	t, ok := f.tasks[id.String()]
 	if !ok {
 		return domaintask.Task{}, domainerr.ErrNotFound
@@ -33,12 +42,16 @@ func (f *fakeRepo) GetByID(ctx context.Context, id valueobject.TaskID) (domainta
 }
 
 func (f *fakeRepo) Create(ctx context.Context, req domaintask.CreateRequest) (valueobject.TaskID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	id, _ := valueobject.NewTaskID("00000000-0000-0000-0000-000000000001")
 	f.tasks[id.String()] = domaintask.Task{ID: id, Title: req.Title, Subtasks: req.Subtasks}
 	return id, nil
 }
 
 func (f *fakeRepo) Update(ctx context.Context, id valueobject.TaskID, req domaintask.UpdateRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	t, ok := f.tasks[id.String()]
 	if !ok {
 		return domainerr.ErrNotFound
@@ -55,6 +68,8 @@ func (f *fakeRepo) Update(ctx context.Context, id valueobject.TaskID, req domain
 }
 
 func (f *fakeRepo) Delete(ctx context.Context, id valueobject.TaskID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	t, ok := f.tasks[id.String()]
 	if !ok {
 		return domainerr.ErrNotFound
@@ -103,7 +118,7 @@ func TestAddSubtaskAppendsAndValidates(t *testing.T) {
 	parent := seed(t, repo, uuidA)
 	child := seed(t, repo, uuidB)
 	_ = child
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 
 	if err := svc.AddSubtask(context.Background(), parent, mkTID(t, uuidB)); err != nil {
 		t.Fatalf("AddSubtask: %v", err)
@@ -136,7 +151,7 @@ func TestRemoveSubtaskDetachesOnlyLink(t *testing.T) {
 	parent := seed(t, repo, uuidA, uuidB, uuidC)
 	seed(t, repo, uuidB)
 	seed(t, repo, uuidC)
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 
 	if err := svc.RemoveSubtask(context.Background(), parent, mkTID(t, uuidB)); err != nil {
 		t.Fatalf("RemoveSubtask: %v", err)
@@ -165,7 +180,7 @@ func TestListSubtasksReportsBroken(t *testing.T) {
 	seed(t, repo, uuidB)
 	seed(t, repo, uuidC)
 	// uuidD не существует → битая ссылка
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 
 	res, err := svc.ListSubtasks(context.Background(), parent)
 	if err != nil {
@@ -184,7 +199,7 @@ func TestListSubtasksReportsBroken(t *testing.T) {
 
 func TestCreateTaskWithSubtasks(t *testing.T) {
 	repo := newFakeRepo()
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 	id, err := svc.CreateTask(context.Background(), CreateTaskParams{
 		Title:    "parent",
 		Subtasks: []valueobject.TaskID{mkTID(t, uuidB), mkTID(t, uuidC)},
@@ -204,7 +219,7 @@ func TestStickerPatchSerializesNullAsRemove(t *testing.T) {
 	repo := newFakeRepo()
 	parent := seed(t, repo, uuidA)
 	_ = parent
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 	sid, err := valueobject.NewStickerID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +240,7 @@ func TestStickerPatchSerializesNullAsRemove(t *testing.T) {
 func TestUndeleteViaUpdate(t *testing.T) {
 	repo := newFakeRepo()
 	id := seed(t, repo, uuidA)
-	svc := newTestService(repo)
+	svc := NewService(repo, nil, nil, nil)
 
 	if err := svc.DeleteTask(context.Background(), id); err != nil {
 		t.Fatalf("DeleteTask: %v", err)
@@ -241,5 +256,47 @@ func TestUndeleteViaUpdate(t *testing.T) {
 	}
 	if repo.tasks[uuidA].Deleted {
 		t.Fatal("expected deleted=false after restore")
+	}
+}
+
+// slowRepo — fakeRepo с задержкой GetByID, чтобы read-modify-write гонка
+// без мьютекса проявлялась детерминированно (окно между GET и PUT).
+type slowRepo struct{ fakeRepo }
+
+func (f *slowRepo) GetByID(ctx context.Context, id valueobject.TaskID) (domaintask.Task, error) {
+	time.Sleep(5 * time.Millisecond)
+	return f.fakeRepo.GetByID(ctx, id)
+}
+
+func TestAddSubtaskConcurrentNoLostUpdates(t *testing.T) {
+	base := newFakeRepo()
+	repo := &slowRepo{*base}
+	parent := seed(t, base, uuidA)
+	const n = 10
+	children := make([]valueobject.TaskID, n)
+	for i := range children {
+		children[i] = seed(t, base, fmt.Sprintf("55555555-6666-7777-8888-%012d", i))
+	}
+	svc := NewService(repo, nil, nil, nil)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for _, ch := range children {
+		wg.Add(1)
+		go func(cid valueobject.TaskID) {
+			defer wg.Done()
+			errs <- svc.AddSubtask(context.Background(), parent, cid)
+		}(ch)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AddSubtask: %v", err)
+		}
+	}
+	got := repo.tasks[uuidA].Subtasks
+	if len(got) != n {
+		t.Fatalf("потеряны обновления: подзадач %d из %d (гонка read-modify-write)", len(got), n)
 	}
 }

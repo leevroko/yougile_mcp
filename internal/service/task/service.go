@@ -155,6 +155,21 @@ type service struct {
 	columns  domaincolumn.Repository
 	stickers domainsticker.Repository
 	chats    chat.Repository
+
+	// parentLocks — per-parent мьютексы: сериализуют read-modify-write
+	// подзадач (GET → PUT полная замена) внутри процесса. Без этого параллельные
+	// add_subtask на одного родителя теряют записи (issue #7): перекрывающиеся GET
+	// читают один и тот же список и PUT-ы затирают друг друга. Покрывает и daemon-режим
+	// (все агенты через один процесс); внешние клиенты API вне нашего контроля.
+	parentLocks sync.Map // map[TaskID-key]*sync.Mutex
+}
+
+// lockParent захватывает мьютекс родителя (создаёт при первом обращении).
+func (s *service) lockParent(id valueobject.TaskID) func() {
+	v, _ := s.parentLocks.LoadOrStore(id.String(), &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (s *service) CreateTask(ctx context.Context, req CreateTaskParams) (valueobject.TaskID, error) {
@@ -178,6 +193,8 @@ func (s *service) AddSubtask(ctx context.Context, parentID, childID valueobject.
 	if _, err := s.tasks.GetByID(ctx, childID); err != nil {
 		return fmt.Errorf("подзадача %s не найдена (битая ссылка?): %w", childID.String(), err)
 	}
+	unlock := s.lockParent(parentID)
+	defer unlock()
 	parent, err := s.tasks.GetByID(ctx, parentID)
 	if err != nil {
 		return err
@@ -194,6 +211,8 @@ func (s *service) AddSubtask(ctx context.Context, parentID, childID valueobject.
 // RemoveSubtask отвязывает задачу от родителя: рвётся связь, задача остаётся живой.
 // Идемпотентен: отвязка отсутствующей подзадачи — no-op.
 func (s *service) RemoveSubtask(ctx context.Context, parentID, childID valueobject.TaskID) error {
+	unlock := s.lockParent(parentID)
+	defer unlock()
 	parent, err := s.tasks.GetByID(ctx, parentID)
 	if err != nil {
 		return err
