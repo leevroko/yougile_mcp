@@ -18,6 +18,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
@@ -72,6 +73,8 @@ interface YougileConfig {
   permissions?: { allow?: string[]; confirm?: string[]; deny?: string[] };
   audit?: { enabled?: boolean; path?: string };
   pi_scope?: { roots?: string[] }; // каталоги активации расширения в pi (issue #3)
+  agent_id?: string; // идентичность агента: clientInfo handshake + префикс sender (issue #4)
+  mcp_url?: string; // адрес демона yougile-mcp serve (http://127.0.0.1:7801/mcp); пусто → stdio (issue #4)
 }
 
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "yougile-mcp", "config.json");
@@ -151,6 +154,31 @@ let toolList: any[] = [];
 let cfg: YougileConfig | null = null;
 let connectError: string | null = null;
 let connecting: Promise<void> | null = null;
+// issue #4: как мы подключены — daemon | stdio | "stdio (fallback: …)" | null (не подключались)
+let connMode: string | null = null;
+
+// mcpUrl — адрес демона (issue #4): env YOUGILE_MCP_URL > mcp_url в конфиге.
+// Пусто → прежний stdio. URL указывает на endpoint, напр. http://127.0.0.1:7801/mcp
+function mcpUrl(): string | null {
+  const env = (process.env.YOUGILE_MCP_URL || "").trim();
+  if (env) return env;
+  const fromCfg = (loadConfig()?.mcp_url || "").trim();
+  return fromCfg || null;
+}
+
+// agentName — идентичность агента для handshake демона (clientInfo.name) и
+// префиксов sender: YOUGILE_AGENT_ID > agent_id из конфига > "pi-agent".
+function agentName(): string {
+  return (process.env.YOUGILE_AGENT_ID || cfg?.agent_id || "pi-agent").trim() || "pi-agent";
+}
+
+// withTimeout — обёртка для ограничения попытки подключения к демону.
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms)),
+  ]);
+}
 
 async function ensureConnected(): Promise<void> {
   if (client) return;
@@ -165,6 +193,30 @@ async function ensureConnected(): Promise<void> {
       connectError = `api_key is empty in ${configPath()}`;
       return;
     }
+
+    // issue #4: сначала пробуем демон — один общий процесс на N агентов
+    // (общий rate-limit, per-connection режим, идентичность из handshake).
+    const daemonUrl = mcpUrl();
+    if (daemonUrl) {
+      try {
+        const httpTransport = new StreamableHTTPClientTransport(new URL(daemonUrl));
+        client = new Client({ name: agentName(), version: "0.3.0" });
+        await withTimeout(client.connect(httpTransport), 4000);
+        const res = await withTimeout(client.listTools(), 4000);
+        toolList = res.tools ?? [];
+        connectError = null;
+        connMode = `daemon (${daemonUrl}, agent=${agentName()})`;
+        return;
+      } catch (e: any) {
+        // Демон недоступен → тихий fallback на stdio (issue #4, п.5 acceptance)
+        client = null;
+        toolList = [];
+        connMode = `stdio (fallback: ${String(e?.message ?? e).slice(0, 120)})`;
+      }
+    } else {
+      connMode = "stdio";
+    }
+
     const bin = resolveBinary();
     if (!existsSync(bin)) {
       connectError = `binary not found at ${bin}. Build: make build && cp bin/yougile-mcp ~/.local/bin/`;
@@ -177,7 +229,7 @@ async function ensureConnected(): Promise<void> {
         YOUGILE_CONFIG: configPath(),
       },
     });
-    client = new Client({ name: "pi-yougile-mcp", version: "0.3.0" });
+    client = new Client({ name: agentName(), version: "0.3.0" });
     await client.connect(transport);
     const res = await client.listTools();
     toolList = res.tools ?? [];
@@ -493,6 +545,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       }
       const liveMode = mode === "off" ? "off (локально)" : await currentMode();
       lines.push(`  mode:     ${liveMode} (в config: ${cfg?.mode ?? (cfg?.read_only ? "read" : "не задан")})`);
+      lines.push(`  connect:  ${connMode ?? "не подключено"}`);
       lines.push(`  api key:  loaded from config file (${cfg?.api_key ? "present" : "MISSING"})`);
       lines.push(`  audit:    ${cfg?.audit?.enabled === false ? "disabled" : `enabled → ${cfg?.audit?.path ?? "~/.local/state/yougile-mcp/audit.jsonl"}`}`);
       lines.push(`  allow:    ${(cfg?.permissions?.allow ?? DEFAULT_ALLOW).join(", ")}`);

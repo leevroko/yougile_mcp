@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -39,6 +40,7 @@ type Deps struct {
 	Config      *config.Config // полный загруженный конфиг (для персиста режима без потери полей)
 	ConfigPath  string         // путь к конфигу для персиста режима
 	AuditLog    audit.Logger   // аудит мутаций (nil → заглушка)
+	Daemon      bool           // issue #4: один сервер на N агентов — per-session режим и идентичность
 }
 
 // Server — MCP-сервер YouGile.
@@ -52,10 +54,12 @@ type Server struct {
 	comp     compressionservice.Service
 	readOnly bool // legacy flag: если true — мутации скрыты
 	mode     config.Mode
-	agentID  string // идентификатор агента (YOUGILE_AGENT_ID/agent_id) для префиксов в чатах
+	agentID  string            // идентификатор агента (YOUGILE_AGENT_ID/agent_id) для префиксов в чатах
 	cfgPath  string
 	cfg      *config.Config
 	auditLog audit.Logger
+	sessions *SessionRegistry // per-session режим/имя (актуально в daemon-режиме)
+	daemon   bool
 	mu       sync.RWMutex
 }
 
@@ -66,7 +70,7 @@ func (s *Server) Mode() config.Mode {
 	return s.mode
 }
 
-// SetMode изменяет режим и персистит в конфиг-файл.
+// SetMode изменяет режим и персистит в конфиг-файл (stdio-режим).
 func (s *Server) SetMode(m config.Mode) bool {
 	if !config.ValidMode(string(m)) {
 		return false
@@ -82,6 +86,39 @@ func (s *Server) SetMode(m config.Mode) bool {
 	}
 	s.mu.Unlock()
 	return true
+}
+
+// EffectiveMode — режим для конкретного вызова: в daemon-режиме пер-сессионный
+// override агента, если задан; иначе глобальный режим сервера (issue #4).
+func (s *Server) EffectiveMode(ctx context.Context) config.Mode {
+	if s.daemon {
+		if st, ok := s.sessions.Get(SessionIDFromCtx(ctx)); ok && st.Mode != "" {
+			return st.Mode
+		}
+	}
+	return s.Mode()
+}
+
+// AgentName — идентичность агента для текущего вызова (issue #4):
+// в daemon-режиме — имя из handshake сессии; иначе — пусто.
+func (s *Server) AgentName(ctx context.Context) string {
+	if s.daemon {
+		if st, ok := s.sessions.Get(SessionIDFromCtx(ctx)); ok {
+			return st.Name
+		}
+	}
+	return ""
+}
+
+type sessionKey struct{}
+
+// SessionIDFromCtx извлекает ID MCP-сессии из контекста вызова
+// (server.ClientSessionFromContext). Пустая строка — сессия неизвестна.
+func SessionIDFromCtx(ctx context.Context) string {
+	if cs := server.ClientSessionFromContext(ctx); cs != nil {
+		return cs.SessionID()
+	}
+	return ""
 }
 
 // New создаёт MCP-сервер с зарегистрированными инструментами.
@@ -104,8 +141,34 @@ func New(deps Deps) *Server {
 	if cfg.Mode == "" {
 		cfg.Mode = config.ModeConfirm
 	}
+	// issue #4: в daemon-режиме агент представляется в handshake (clientInfo.name) →
+	// per-session режим + идентичность отправителя без общих гонок за config.json.
+	// Хуки задаются опцией NewMCPServer(WithHooks), поэтому собираем до создания ядра.
+	var opts []server.ServerOption = []server.ServerOption{server.WithToolCapabilities(false)}
+	sessions := newSessionRegistry()
+	if deps.Daemon {
+		hooks := &server.Hooks{}
+		hooks.AddAfterInitialize(func(ctx context.Context, _ any, req *mcp.InitializeRequest, _ *mcp.InitializeResult) {
+			sessions.Remember(SessionIDFromCtx(ctx), req.Params.ClientInfo.Name)
+		})
+		hooks.AddOnUnregisterSession(func(ctx context.Context, session server.ClientSession) {
+			sessions.Forget(session.SessionID())
+		})
+		hooks.AddAfterCallTool(func(ctx context.Context, _ any, req *mcp.CallToolRequest, result any) {
+			name := "unknown"
+			if st, ok := sessions.Get(SessionIDFromCtx(ctx)); ok && st.Name != "" {
+				name = st.Name
+			}
+			outcome := "ok"
+			if res, ok := result.(*mcp.CallToolResult); ok && res != nil && res.IsError {
+				outcome = "error"
+			}
+			fmt.Fprintf(os.Stderr, "yougile-mcp: agent=%s tool=%s %s\n", name, req.Params.Name, outcome)
+		})
+		opts = append(opts, server.WithHooks(hooks))
+	}
 	s := &Server{
-		mcp:      server.NewMCPServer("yougile-mcp", "0.1.0", server.WithToolCapabilities(false)),
+		mcp:      server.NewMCPServer("yougile-mcp", "0.1.0", opts...),
 		board:    deps.Board,
 		tasks:    deps.Tasks,
 		review:   deps.Review,
@@ -118,6 +181,8 @@ func New(deps Deps) *Server {
 		cfgPath:  deps.ConfigPath,
 		cfg:      cfg,
 		auditLog: log,
+		sessions: sessions,
+		daemon:   deps.Daemon,
 	}
 	s.registerTools()
 	return s
@@ -235,7 +300,7 @@ func (s *Server) registerTools() {
 		mut(mcp.WithDescription("Отправить сообщение в чат задачи. К тексту ВСЕГДА добавляется префикс идентификации: \"[sender] текст\""),
 			mcp.WithString("taskId", mcp.Required(), mcp.Description("ID задачи")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Текст сообщения (без префикса — он добавится автоматически)")),
-			mcp.WithString("sender", mcp.Description("Кто пишет (имя агента, напр. \"pi/yougile\"). Если не задан — YOUGILE_AGENT_ID сервера; иначе ошибка")))...,
+			mcp.WithString("sender", mcp.Description("Кто пишет (имя агента, напр. \"pi/yougile\"). Если не задан — имя клиента из handshake (daemon) или agent_id сервера; иначе ошибка")))...,
 	), "send_task_message", s.handleSendTaskMessage)
 
 	mutating(mcp.NewTool("delete_board",
@@ -311,7 +376,7 @@ func (s *Server) wrapMutating(name string, h server.ToolHandlerFunc) server.Tool
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args := req.GetArguments()
 		// read-режим блокирует мутации, кроме set_mode (иначе не выйти из read).
-		if s.Mode() == config.ModeRead && name != "set_mode" {
+		if s.EffectiveMode(ctx) == config.ModeRead && name != "set_mode" {
 			res := errResult(errors.New("сервер в read-режиме: мутации запрещены. Вызовите set_mode для переключения"))
 			s.auditLog.Log(name, "read-blocked", args)
 			return res, nil
@@ -579,12 +644,17 @@ func (s *Server) handleSendTaskMessage(ctx context.Context, req mcp.CallToolRequ
 	}
 	// Идентификация отправителя обязательна: несколько агентов работают
 	// от одного API-ключа, различать их можно только префиксом.
+	// Приоритет (issue #4): явный sender > имя агента из handshake (daemon) >
+	// agent_id сервера > ошибка.
 	sender := str(args, "sender")
+	if sender == "" {
+		sender = s.AgentName(ctx)
+	}
 	if sender == "" {
 		sender = s.agentID
 	}
 	if sender == "" {
-		return errResult(errors.New("sender не задан: передайте sender или выставьте YOUGILE_AGENT_ID серверу (идентификация агентов обязательна)")), nil
+		return errResult(errors.New("sender не задан: передайте sender, подключитесь с именем клиента (clientInfo.name) или выставьте YOUGILE_AGENT_ID серверу (идентификация агентов обязательна)")), nil
 	}
 	id, err := s.tasks.SendTaskMessage(ctx, tid, "["+sender+"] "+text)
 	if err != nil {
@@ -940,16 +1010,23 @@ func renderSnapshotMarkdown(snap board.Aggregate) string {
 }
 
 // handleGetMode — текущий режим доступа.
+// В daemon-режиме — режим сессии вызывающего агента, иначе глобальный.
 func (s *Server) handleGetMode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return textResult(fmt.Sprintf(`{"mode": %q}`, string(s.Mode()))), nil
+	return textResult(fmt.Sprintf(`{"mode": %q}`, string(s.EffectiveMode(ctx)))), nil
 }
 
-// handleSetMode — смена режима (read|confirm|yolo). Персистится в конфиг.
+// handleSetMode — смена режима (read|confirm|yolo).
+// stdio: персистится в конфиг (как раньше). daemon: только для сессии агента —
+// /yougile-mode yolo у одного не меняет режим другим (issue #4).
 func (s *Server) handleSetMode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	m := config.Mode(str(args, "mode"))
 	if !config.ValidMode(string(m)) {
 		return errResult(fmt.Errorf("невалидный режим %q: ожидается read|confirm|yolo", m)), nil
+	}
+	if s.daemon {
+		s.sessions.SetMode(SessionIDFromCtx(ctx), m)
+		return textResult(fmt.Sprintf(`{"mode": %q, "ok": true, "scope": "session"}`, string(m))), nil
 	}
 	if !s.SetMode(m) {
 		return errResult(errors.New("не удалось сохранить режим в конфиг")), nil

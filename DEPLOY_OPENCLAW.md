@@ -142,3 +142,16 @@ openclaw mcp configure yougile --timeout 60
 | `~/.local/state/yougile-mcp/audit.jsonl` | JSONL-лог всех попыток мутаций (ok/error/read-blocked) |
 | `~/.local/share/yougile-mcp/memory/reviews` | Директория отчётов `compress_reviews` |
 | `~/.openclaw/openclaw.json` → `mcp.servers.yougile` | Регистрация сервера в OpenClaw |
+
+## Опционально: daemon-режим (issue #4)
+
+Если на сервере несколько MCP-клиентов (OpenClaw + другие агенты) — можно поднять один демон вместо N stdio-процессов: общий rate-limiter (~50 rpm на всех, вместо N×50, пробивающих лимит ключа), per-connection режим и идентичность:
+
+```bash
+# systemd (/etc/systemd/system/yougile-mcp.service)
+[Service]
+ExecStart=/root/bin/yougile-mcp serve --addr 127.0.0.1:7801
+Restart=on-failure
+```
+
+Клиенты, поддерживающие streamable HTTP MCP, подключаются на `http://127.0.0.1:7801/mcp` (health: `/healthz`). Имя клиента из handshake (`clientInfo.name`) — идентичность: `set_mode` действует только на свою сессию, `send_task_message` без `sender` подписывается этим именем, лог демона в stderr атрибутирует вызовы `agent=<имя>`. Клиент с stdio-only (как OpenClaw по умолчанию) продолжает работать как раньше — daemon ничего не меняет в stdio-режиме.

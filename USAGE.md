@@ -118,6 +118,42 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 
 Без `pi_scope.roots` — только каталог проекта yougile_mcp. В каталоге вне roots: `/yougile-on` включает на текущую сессию, `/yougile-status` показывает точную причину неактивности. Env `YOUGILE_PI_EXT=global|off` — как раньше (off — жёсткий kill-switch, не обходится `/yougile-on`).
 
+### Daemon-режим (issue #4): один yougile-mcp на N агентов
+
+По умолчанию каждый pi-агент поднимает свой stdio-процесс yougile-mcp со своим лимитом запросов (429). Daemon-режим: один процесс обслуживает всех агентов — общий rate-limiter (~50 rpm на всех), per-connection режим и идентичность.
+
+**Запуск демона** (localhost-only):
+
+```bash
+yougile-mcp serve --addr 127.0.0.1:7801   # -config опционален, как у stdio
+# health: curl http://127.0.0.1:7801/healthz → ok
+```
+
+**Подключение агентов** — env `YOUGILE_MCP_URL` (или `mcp_url` в конфиге, env приоритетнее):
+
+```bash
+YOUGILE_MCP_URL=http://127.0.0.1:7801/mcp YOUGILE_AGENT_ID=pi-agent-1 pi -p "..."
+```
+
+Демон недоступен → расширение молча падает в штатный stdio; строка `connect:` в `/yougile-status` показывает `daemon (url, agent=имя)`, `stdio` или `stdio (fallback: причина)`.
+
+**Идентичность агента**: `YOUGILE_AGENT_ID` (или `agent_id` в конфиге) передаётся в handshake (`clientInfo.name`). Демон различает агентов: `set_mode` действует только на сессию агента (глобальный режим в конфиге не трогается), `send_task_message` без явного `sender` подписывается именем агента, лог демона (`stderr`) пишет `agent=<имя> tool=<тул> ok|error`.
+
+systemd user unit (автостарт, пример):
+
+```ini
+# ~/.config/systemd/user/yougile-mcp.service
+[Unit]
+Description=yougile-mcp daemon (MCP for N agents)
+
+[Service]
+ExecStart=%h/.local/bin/yougile-mcp serve --addr 127.0.0.1:7801
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
 Пример политики в конфиге:
 
 ```json
