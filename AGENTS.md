@@ -247,8 +247,10 @@ import (
 
 ### Git Commits
 
-- Формат: `type: short description` (conventional commits, но без строгости semver)
-- Примеры: `feat: add HTTP client with rate limiter`, `fix: handle 429 retry-after header`, `docs: add API reference for user endpoints`
+- Формат: **Conventional Commits 1.0** — `type(scope)!: description` + футеры `Fixes #N`, `BREAKING CHANGE: …`
+- Типы: `feat`/`fix`/`perf`/`refactor`/`docs`/`test`/`ci`/`chore`; scopes: `mcp`, `board`, `task`, `sticker`, `chat`, `http`, `config`, `audit`, `pi-ext`, `deploy`, `cli`
+- Примеры: `feat(mcp): task chat — get_task_messages + send_task_message`, `fix(pi-ext): preserve foreign tools in setActiveTools (fixes #1)`, `feat(mcp)!: rename …` + `BREAKING CHANGE: …`
+- Версионирование, changelog и релизы (semver 0.x, ручные теги + CI) — **[RELEASE_POLICY.md](RELEASE_POLICY.md)**; история изменений — [CHANGELOG.md](CHANGELOG.md); каждая feat/fix пишется в `[Unreleased]` changelog'а в том же коммите
 
 ---
 
