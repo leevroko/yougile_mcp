@@ -261,7 +261,7 @@ func TestUndeleteViaUpdate(t *testing.T) {
 
 // slowRepo — fakeRepo с задержкой GetByID, чтобы read-modify-write гонка
 // без мьютекса проявлялась детерминированно (окно между GET и PUT).
-type slowRepo struct{ fakeRepo }
+type slowRepo struct{ *fakeRepo }
 
 func (f *slowRepo) GetByID(ctx context.Context, id valueobject.TaskID) (domaintask.Task, error) {
 	time.Sleep(5 * time.Millisecond)
@@ -270,7 +270,7 @@ func (f *slowRepo) GetByID(ctx context.Context, id valueobject.TaskID) (domainta
 
 func TestAddSubtaskConcurrentNoLostUpdates(t *testing.T) {
 	base := newFakeRepo()
-	repo := &slowRepo{*base}
+	repo := &slowRepo{base}
 	parent := seed(t, base, uuidA)
 	const n = 10
 	children := make([]valueobject.TaskID, n)
