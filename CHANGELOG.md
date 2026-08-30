@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-31
+
 ### Added
 - Подзадачи (issue #5): `create_task` с `subtasks` — атомарное создание родителя с детьми; `update_task` — `subtasks` (полная замена), `add_subtask` / `remove_subtask` (read-modify-write, идемпотентные, с проверкой существования ребёнка); `list_tasks` с `parentId` — прямые дети родителя + `broken` (битые ссылки).
 - Инструмент `delete_task` — мягкое удаление задачи (deleted=true).
