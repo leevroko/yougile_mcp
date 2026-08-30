@@ -22,18 +22,42 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 
-// ── Project-scope guard (issue #1) ─────────────────────────────────────
-// Extension is installed user-scope, but must only activate inside the
-// yougile_mcp project. Silent no-op everywhere else.
+// ── Activation scope (issues #1, #3) ──────────────────────────────
+// Extension is installed user-scope. By default it activates only inside
+// the yougile_mcp project (issue #1). Additional roots come from the
+// config: pi_scope.roots: ["~/wss/work", ...] (issue #3).
 // Override via env YOUGILE_PI_EXT: "global" (activate everywhere) | "off" (never).
+// Per-session opt-in: /yougile-on command (issue #3).
 
 const PROJECT_ROOT = join(homedir(), "wss", "personal", "yougile_mcp");
 
-function inProjectSession(cwd: string): boolean {
+function expandHome(p: string): string {
+  return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
+}
+
+// activeRoots — каталоги активации: pi_scope.roots из конфига,
+// иначе дефолт [PROJECT_ROOT].
+function activeRoots(): string[] {
+  const raw = loadConfig()?.pi_scope?.roots ?? [];
+  const roots = raw.map(expandHome).filter((r) => r.length > 0);
+  return roots.length > 0 ? roots : [PROJECT_ROOT];
+}
+
+// sessionOptIn — включено ли расширение для этой сессии через /yougile-on.
+let sessionOptIn = false;
+
+function inScopeSession(cwd: string): boolean {
   const override = process.env.YOUGILE_PI_EXT;
+  if (override === "off") return false; // жёсткий kill-switch — не обойти и /yougile-on
   if (override === "global") return true;
-  if (override === "off") return false;
-  return cwd === PROJECT_ROOT || cwd.startsWith(PROJECT_ROOT + sep);
+  if (sessionOptIn) return true;
+  return activeRoots().some((r) => cwd === r || cwd.startsWith(r + sep));
+}
+
+function scopeHint(cwd: string): string {
+  const override = process.env.YOUGILE_PI_EXT;
+  if (override === "off") return "заблокировано env YOUGILE_PI_EXT=off";
+  return `каталог вне pi_scope.roots (cwd=${cwd}; roots: ${activeRoots().join(", ")}). Разрешить на сессию: /yougile-on, постоянно: добавьте каталог в pi_scope.roots конфига`;
 }
 
 // ── Config (file-based, no secrets in env) ──────────────────────────────
@@ -47,6 +71,7 @@ interface YougileConfig {
   bulk_dry_run_first?: boolean;
   permissions?: { allow?: string[]; confirm?: string[]; deny?: string[] };
   audit?: { enabled?: boolean; path?: string };
+  pi_scope?: { roots?: string[] }; // каталоги активации расширения в pi (issue #3)
 }
 
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "yougile-mcp", "config.json");
@@ -261,16 +286,10 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   // same tools twice.
   let toolsRegistered = false;
 
-  pi.on("session_start", async (_event, ctx) => {
-    // cwd-guard: activate only inside the yougile_mcp project (issue #1)
-    if (!inProjectSession(ctx.cwd)) return; // silent no-op in other projects
-
-    if (toolsRegistered) {
-      // Resume in the same process: just re-apply visibility, keep toolset intact.
-      applyModeVisibility();
-      return;
-    }
-
+  // activate — подключение + регистрация тулов + видимость (issue #3:
+  // вынесено из session_start, чтобы /yougile-on мог вызвать то же самое).
+  const activate = async (ctx: { ui: { notify(msg: string, level: "error" | "info" | "warning"): void } }) => {
+    if (toolsRegistered) return;
     await ensureConnected();
     if (connectError) {
       ctx.ui.notify(`yougile-mcp: ${connectError}`, "error");
@@ -388,6 +407,35 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       `yougile-mcp: mode=${mode}, tools: ${visible} видимых из ${registered.length}, denied: ${denied.length}`,
       "info"
     );
+  };
+
+  pi.on("session_start", async (_event, ctx) => {
+    // scope-guard: активация в корнях pi_scope.roots / PROJECT_ROOT (issues #1, #3)
+    if (!inScopeSession(ctx.cwd)) return; // silent no-op вне корней — setActiveTools не трогаем
+
+    if (toolsRegistered) {
+      // Resume in the same process: just re-apply visibility, keep toolset intact.
+      applyModeVisibility();
+      return;
+    }
+
+    await activate(ctx);
+  });
+
+  pi.registerCommand("yougile-on", {
+    description: "Включить yougile-mcp для этой сессии (если каталог вне pi_scope.roots)",
+    handler: async (_args, ctx) => {
+      if (process.env.YOUGILE_PI_EXT === "off") {
+        ctx.ui.notify("yougile-mcp: заблокировано env YOUGILE_PI_EXT=off", "error");
+        return;
+      }
+      if (toolsRegistered) {
+        ctx.ui.notify("yougile-mcp уже активен в этой сессии", "info");
+        return;
+      }
+      sessionOptIn = true; // opt-in на текущую сессию, конфиг не трогаем
+      await activate(ctx);
+    },
   });
 
   pi.registerCommand("yougile-mode", {
@@ -406,7 +454,13 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
         return;
       }
       if (!client) {
-        ctx.ui.notify("yougile-mcp не активен (нет подключения или сессия вне проекта " + PROJECT_ROOT + ")", "error");
+        // Точная причина (issue #3): вне корней или ошибка подключения —
+        // отдельные сообщения вместо смешанного.
+        if (!inScopeSession(ctx.cwd)) {
+          ctx.ui.notify(`yougile-mcp не активен: ${scopeHint(ctx.cwd)}`, "error");
+          return;
+        }
+        ctx.ui.notify(`yougile-mcp: нет подключения: ${connectError ?? "неизвестно"}`, "error");
         return;
       }
       const res = await client.callTool({ name: "set_mode", arguments: { mode: target } });
@@ -424,8 +478,9 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
   pi.registerCommand("yougile-status", {
     description: "Security status of yougile-mcp (mode, policy, paths)",
     handler: async (_args, ctx) => {
-      if (!inProjectSession(ctx.cwd)) {
-        ctx.ui.notify(`yougile-mcp: вне проекта ${PROJECT_ROOT} расширение неактивно`, "info");
+      if (!inScopeSession(ctx.cwd)) {
+        // Точная причина (issue #3): cwd и список корней, а не «нет подключения».
+        ctx.ui.notify(`yougile-mcp: не активен — ${scopeHint(ctx.cwd)}`, "info");
         return;
       }
       await ensureConnected();
@@ -444,6 +499,7 @@ export default function yougileMcpExtension(pi: ExtensionAPI) {
       lines.push(`  confirm:  ${(cfg?.permissions?.confirm ?? DEFAULT_CONFIRM).join(", ")}`);
       lines.push(`  deny:     ${(cfg?.permissions?.deny ?? []).join(", ") || "(none)"}`);
       lines.push(`  bulk dry-run-first: ${cfg?.bulk_dry_run_first !== false ? "on" : "off"}`);
+      lines.push(`  pi_scope: ${activeRoots().join(", ")}${sessionOptIn ? " (+ /yougile-on для этой сессии)" : ""}`);
       lines.push(`  registered: ${registered.length}, denied (hidden): ${denied.length}`);
       ctx.ui.notify(lines.join("\n"), "info");
     },

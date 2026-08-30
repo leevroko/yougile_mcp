@@ -108,6 +108,15 @@ unset YOUGILE_API_KEY YOUGILE_LOGIN YOUGILE_PWD
 | Политика | `permissions.allow/confirm/deny` (glob) в конфиге |
 | История мутаций | `~/.local/state/yougile-mcp/audit.jsonl` |
 | Текущее состояние | `/yougile-status` |
+| Где расширение активно | `pi_scope.roots` в конфиге (по умолчанию — только каталог проекта yougile_mcp); на одну сессию — `/yougile-on` |
+
+Пример `pi_scope` (в каких каталогах pi расширение активно, issue #3):
+
+```json
+"pi_scope": { "roots": ["~/wss/personal/yougile_mcp", "~/wss/work"] }
+```
+
+Без `pi_scope.roots` — только каталог проекта yougile_mcp. В каталоге вне roots: `/yougile-on` включает на текущую сессию, `/yougile-status` показывает точную причину неактивности. Env `YOUGILE_PI_EXT=global|off` — как раньше (off — жёсткий kill-switch, не обходится `/yougile-on`).
 
 Пример политики в конфиге:
 
