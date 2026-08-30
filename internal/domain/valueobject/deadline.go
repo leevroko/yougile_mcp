@@ -1,6 +1,9 @@
 package valueobject
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // ErrInvalidDeadline — некорректный дедлайн (timestamp <= 0).
 var ErrInvalidDeadline = errors.New("invalid deadline: timestamp must be positive")
@@ -29,6 +32,27 @@ func (d Deadline) Value() int64 { return d.value }
 // IsOverdue возвращает true, если дедлайн раньше nowMS.
 func (d Deadline) IsOverdue(nowMS int64) bool {
 	return d.value < nowMS
+}
+
+// MarshalJSON отдаёт дедлайн в формате API YouGile: {"deadline": <ms>}.
+// Без него структура с приватным полем сериализуется как {} — get_task
+ // показывал пустой дедлайн при реально записанном значении (issue #8).
+func (d Deadline) MarshalJSON() ([]byte, error) {
+	return json.Marshal(deadlineWire{Deadline: d.value})
+}
+
+// UnmarshalJSON читает {"deadline": <ms>} (симметрия MarshalJSON).
+func (d *Deadline) UnmarshalJSON(b []byte) error {
+	var w deadlineWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	d.value = w.Deadline
+	return nil
+}
+
+type deadlineWire struct {
+	Deadline int64 `json:"deadline"`
 }
 
 // OverdueDays возвращает количество полных дней просрочки (>= 0).

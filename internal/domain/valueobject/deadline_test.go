@@ -1,6 +1,9 @@
 package valueobject
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestNewDeadline_Invalid(t *testing.T) {
 	if _, err := NewDeadline(0); err == nil {
@@ -55,5 +58,36 @@ func TestDeadline_OverdueDays(t *testing.T) {
 				t.Fatalf("OverdueDays() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeadlineMarshalJSONWireFormat(t *testing.T) {
+	dl, err := NewDeadline(1756684800000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(dl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"deadline":1756684800000}` {
+		t.Fatalf(" MarshalJSON: %s", b)
+	}
+	// nil-указатель → null (дедлайн не задан)
+	var p *Deadline
+	b, _ = json.Marshal(p)
+	if string(b) != "null" {
+		t.Fatalf("nil deadline: %s", b)
+	}
+	// UnmarshalJSON — симметрия
+	var back Deadline
+	if err := json.Unmarshal(b[:0], &back); err == nil {
+		t.Fatal("empty unmarshal must fail")
+	}
+	if err := json.Unmarshal([]byte(`{"deadline":1756684800000}`), &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Value() != dl.Value() {
+		t.Fatalf("roundtrip: %d != %d", back.Value(), dl.Value())
 	}
 }
