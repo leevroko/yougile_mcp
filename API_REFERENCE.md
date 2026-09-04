@@ -1078,6 +1078,7 @@ overdue_days = (now_ms - dl) / (86400 * 1000)
 
 ## 19. Неопределённости (требуют проверки на реальном API)
 
+0. **Базы знаний — API отсутствует** (проверено 2026-08-31): в официальной OpenAPI-спеке (GET `/api-json` с Bearer-ключом, 40 путей) нет ни одного эндпоинта для баз знаний/страниц; живые пробы `/knowledge-bases`, `/knowledge`, `/books`, `/wiki`, `/kb`, `/book-pages`, `/pages`, `/notes` — 404 `Cannot GET`. Фича доступна только в веб-версии UI (help.yougile.com: книги/страницы, вложенность, история изменений). Не проверено: видна ли созданная в UI база знаний как проект/доска в `GET /projects` / `GET /boards`.
 1. **`/companies{*companyId}`** — формат URL неясен: нужен слеш или нет? (spec: `/companies09a0fdb3...`). В легаси не используется.
 2. **`custom` в StickersDto доски** — что возвращает поле `stickers.custom` в ответе `GET /boards/{id}`? Легаси не показывает.
 3. ~~**Старый `/stickers` vs новый `/string-stickers`**~~ — **частично закрыто (2026-08-23)**: легенда с опциями (`states` с короткими hex-ID типа `659a6c507fc7`, НЕ UUID) доступна только через `GET /string-stickers?boardId=`; старый `GET /stickers` возвращает id/тип без опций. В задаче значение select-стикера = ID состояния (короткий hex). Репозиторий берёт легенду из `/string-stickers`, значения в `PUT /tasks/{id}` — `{"stickers": {"<stickerId>": "<stateId>"}}` — проверено живым вызовом.
